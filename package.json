@@ -1,0 +1,30 @@
+{
+  "name": "all-in-moderation",
+  "version": "0.0.0",
+  "private": true,
+  "description": "All In Moderation — multi-client, 24/7 AI moderation platform (Phase 0 foundation).",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "node --test --experimental-test-isolation=none \"tests/**/*.test.ts\"",
+    "test:watch": "node --test --watch \"tests/**/*.test.ts\"",
+    "demo": "node src/runtime/demo.ts",
+    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.13.3",
+    "eslint": "10.9.1",
+    "globals": "17.11.0",
+    "prettier": "3.6.2",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.68.0"
+  }
+}

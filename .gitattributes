@@ -1,0 +1,6 @@
+# Prettier is configured with the default `endOfLine: "lf"`. Without this, a clone on a machine
+# with core.autocrlf=true checks out CRLF and `npm run format:check` fails on every file.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
