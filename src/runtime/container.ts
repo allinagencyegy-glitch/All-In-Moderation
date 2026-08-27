@@ -7,6 +7,27 @@ import type { Logger } from '../platform/logger.ts';
 import { createLogger } from '../platform/logger.ts';
 import type { AccountRepository } from '../core/account/index.ts';
 import { scopeForAccount } from '../core/account/index.ts';
+import type {
+  ChannelConnectionRepository,
+  ChannelIdentityRepository,
+  ConversationRepository,
+  HandoffRepository,
+  MessageRepository,
+  ModeratorRunRepository,
+  OutboundActionRepository,
+  RawInboundEventRepository,
+  SecretResolver,
+} from '../moderation/ports.ts';
+import type {
+  AccountPackRepository,
+  KnowledgeGapRepository,
+  KnowledgeRepository,
+} from '../knowledge/ports.ts';
+import type { AuditLog } from '../operations/audit.ts';
+import type { DeadLetterStore } from '../operations/dead-letter.ts';
+import type { EventOutbox } from '../operations/events/outbox.ts';
+import type { JobQueue } from '../operations/jobs/queue.ts';
+import type { TransactionRunner } from '../operations/transaction.ts';
 import { createKnowledgeGate } from '../knowledge/application/knowledge-gate.ts';
 import type { LlmProvider, ModelResolver } from '../platform/llm/provider.ts';
 import { createStaticModelResolver } from '../platform/llm/provider.ts';
@@ -61,9 +82,37 @@ import { loadConfig } from './config.ts';
  * this file plus a new adapter directory — and nothing else.
  */
 
-export interface Container {
+/**
+ * The set of ports the composition root needs, as one swappable unit.
+ *
+ * Phase 0 predicted the Postgres swap would be "a change to this file plus a new adapter
+ * directory - and nothing else". This interface is where that promise is cashed: the memory
+ * bundle and the Postgres bundle satisfy it identically, and every service below is built from it
+ * without knowing which one it got.
+ */
+export interface Persistence {
+  readonly transactions: TransactionRunner;
+  readonly accounts: AccountRepository;
+  readonly connections: ChannelConnectionRepository;
+  readonly rawEvents: RawInboundEventRepository;
+  readonly identities: ChannelIdentityRepository;
+  readonly conversations: ConversationRepository;
+  readonly messages: MessageRepository;
+  readonly runs: ModeratorRunRepository;
+  readonly outboundActions: OutboundActionRepository;
+  readonly handoffs: HandoffRepository;
+  readonly knowledge: KnowledgeRepository;
+  readonly packs: AccountPackRepository;
+  readonly knowledgeGaps: KnowledgeGapRepository;
+  readonly outbox: EventOutbox;
+  readonly audit: AuditLog;
+  readonly deadLetters: DeadLetterStore;
+  readonly queue: JobQueue;
+  readonly secrets: SecretResolver;
+}
+
+export interface CoreContainer {
   readonly config: RuntimeConfig;
-  readonly db: MemoryDatabase;
   readonly clock: Clock;
   readonly ids: IdFactory;
   readonly logger: Logger;
@@ -75,20 +124,20 @@ export interface Container {
   readonly moderator: ReturnType<typeof createRunModeratorService>;
   readonly takeover: ReturnType<typeof createTakeoverService>;
   readonly escalation: ReturnType<typeof createEscalationService>;
-  readonly queue: ReturnType<typeof createMemoryJobQueue>;
-  readonly deadLetters: ReturnType<typeof createMemoryDeadLetterStore>;
-  readonly outbox: ReturnType<typeof createMemoryEventOutbox>;
-  readonly audit: ReturnType<typeof createMemoryAuditLog>;
-  readonly knowledge: ReturnType<typeof createMemoryKnowledgeRepository>;
-  readonly packs: ReturnType<typeof createMemoryAccountPackRepository>;
-  readonly conversations: ReturnType<typeof createMemoryConversationRepository>;
-  readonly messages: ReturnType<typeof createMemoryMessageRepository>;
-  readonly runs: ReturnType<typeof createMemoryModeratorRunRepository>;
-  readonly outboundActions: ReturnType<typeof createMemoryOutboundActionRepository>;
-  readonly handoffs: ReturnType<typeof createMemoryHandoffRepository>;
-  readonly knowledgeGaps: ReturnType<typeof createMemoryKnowledgeGapRepository>;
-  readonly connections: ReturnType<typeof createMemoryChannelConnectionRepository>;
-  readonly rawEvents: ReturnType<typeof createMemoryRawInboundEventRepository>;
+  readonly queue: JobQueue;
+  readonly deadLetters: DeadLetterStore;
+  readonly outbox: EventOutbox;
+  readonly audit: AuditLog;
+  readonly knowledge: KnowledgeRepository;
+  readonly packs: AccountPackRepository;
+  readonly conversations: ConversationRepository;
+  readonly messages: MessageRepository;
+  readonly runs: ModeratorRunRepository;
+  readonly outboundActions: OutboundActionRepository;
+  readonly handoffs: HandoffRepository;
+  readonly knowledgeGaps: KnowledgeGapRepository;
+  readonly connections: ChannelConnectionRepository;
+  readonly rawEvents: RawInboundEventRepository;
   /**
    * Crash recovery. Returns expired leases to READY and gives lease-expiry dead letters the same
    * operator visibility and human escalation a worker failure gets (ADR-004).
@@ -98,6 +147,11 @@ export interface Container {
     workerId: string,
     options?: { leaseMs?: number; types?: readonly JobType[] },
   ): Worker;
+}
+
+/** The in-memory container, which additionally exposes the store itself for assertions. */
+export interface Container extends CoreContainer {
+  readonly db: MemoryDatabase;
 }
 
 export interface ContainerOptions {
@@ -110,7 +164,45 @@ export interface ContainerOptions {
   readonly random?: () => number;
 }
 
-export function createContainer(options: ContainerOptions = {}): Container {
+/** Assembles the in-memory persistence bundle. The Phase 0 default. */
+export function createMemoryPersistence(
+  db: MemoryDatabase,
+  ids: IdFactory,
+  secrets: ReadonlyMap<string, string>,
+): Persistence {
+  return {
+    transactions: db.transactions,
+    accounts: createMemoryAccountRepository(db),
+    connections: createMemoryChannelConnectionRepository(db),
+    rawEvents: createMemoryRawInboundEventRepository(db),
+    identities: createMemoryChannelIdentityRepository(db, ids),
+    conversations: createMemoryConversationRepository(db),
+    messages: createMemoryMessageRepository(db),
+    runs: createMemoryModeratorRunRepository(db),
+    outboundActions: createMemoryOutboundActionRepository(db),
+    handoffs: createMemoryHandoffRepository(db),
+    knowledge: createMemoryKnowledgeRepository(db),
+    packs: createMemoryAccountPackRepository(db),
+    knowledgeGaps: createMemoryKnowledgeGapRepository(db),
+    outbox: createMemoryEventOutbox(db),
+    audit: createMemoryAuditLog(db, ids),
+    deadLetters: createMemoryDeadLetterStore(db),
+    queue: createMemoryJobQueue(db),
+    secrets: createMemorySecretResolver(secrets),
+  };
+}
+
+/**
+ * Builds every service from a persistence bundle.
+ *
+ * Nothing below this line mentions a concrete adapter. Pointing the platform at PostgreSQL is a
+ * different argument to this function, not a different code path through it - which is the only
+ * way the Postgres proof can claim to exercise the *same* system the memory tests do.
+ */
+export function createContainerWith(
+  persistence: Persistence,
+  options: ContainerOptions = {},
+): CoreContainer {
   const config = options.config ?? loadConfig();
   const clock = options.clock ?? systemClock;
   const ids =
@@ -121,24 +213,26 @@ export function createContainer(options: ContainerOptions = {}): Container {
     );
   const logger = options.logger ?? createLogger({ level: config.logLevel, now: () => clock.now() });
 
-  const db = createMemoryDatabase();
-  const accounts = createMemoryAccountRepository(db);
-  const connections = createMemoryChannelConnectionRepository(db);
-  const rawEvents = createMemoryRawInboundEventRepository(db);
-  const identities = createMemoryChannelIdentityRepository(db, ids);
-  const conversations = createMemoryConversationRepository(db);
-  const messages = createMemoryMessageRepository(db);
-  const runs = createMemoryModeratorRunRepository(db);
-  const outboundActions = createMemoryOutboundActionRepository(db);
-  const handoffs = createMemoryHandoffRepository(db);
-  const knowledge = createMemoryKnowledgeRepository(db);
-  const packs = createMemoryAccountPackRepository(db);
-  const knowledgeGaps = createMemoryKnowledgeGapRepository(db);
-  const outbox = createMemoryEventOutbox(db);
-  const audit = createMemoryAuditLog(db, ids);
-  const deadLetters = createMemoryDeadLetterStore(db);
-  const queue = createMemoryJobQueue(db);
-  const secrets = createMemorySecretResolver(options.secrets ?? new Map());
+  const {
+    accounts,
+    connections,
+    rawEvents,
+    identities,
+    conversations,
+    messages,
+    runs,
+    outboundActions,
+    handoffs,
+    knowledge,
+    packs,
+    knowledgeGaps,
+    outbox,
+    audit,
+    deadLetters,
+    queue,
+    secrets,
+  } = persistence;
+  const transactions = persistence.transactions;
 
   const provider = options.provider ?? createMockLlmProvider({ clock });
   const models = createStaticModelResolver({
@@ -183,7 +277,7 @@ export function createContainer(options: ContainerOptions = {}): Container {
     // parser/verifier pair plus one line in this file — the domain does not change.
     signatures: metaSignatureVerifier,
     queue,
-    transactions: db.transactions,
+    transactions,
     clock,
     ids,
     logger,
@@ -204,7 +298,7 @@ export function createContainer(options: ContainerOptions = {}): Container {
     parser: metaEnvelopeParser,
     queue,
     outbox,
-    transactions: db.transactions,
+    transactions,
     clock,
     ids,
     logger,
@@ -226,7 +320,7 @@ export function createContainer(options: ContainerOptions = {}): Container {
     queue,
     outbox,
     audit,
-    transactions: db.transactions,
+    transactions,
     clock,
     ids,
     logger,
@@ -243,7 +337,7 @@ export function createContainer(options: ContainerOptions = {}): Container {
     packs,
     outbox,
     audit,
-    transactions: db.transactions,
+    transactions,
     clock,
     ids,
     logger,
@@ -255,7 +349,7 @@ export function createContainer(options: ContainerOptions = {}): Container {
     outbound: outboundActions,
     handoffs,
     audit,
-    transactions: db.transactions,
+    transactions,
     clock,
     ids,
     logger,
@@ -329,7 +423,6 @@ export function createContainer(options: ContainerOptions = {}): Container {
 
   return {
     config,
-    db,
     clock,
     ids,
     logger,
@@ -373,4 +466,24 @@ export function createContainer(options: ContainerOptions = {}): Container {
       });
     },
   };
+}
+
+/**
+ * The default composition root: everything in memory, no network, no database.
+ *
+ * Unchanged in signature and behaviour from Phase 0 - the Phase 0 suite is the regression test for
+ * that, and it must keep passing while the same services run on PostgreSQL next door.
+ */
+export function createContainer(options: ContainerOptions = {}): Container {
+  const db = createMemoryDatabase();
+  const clock = options.clock ?? systemClock;
+  const ids =
+    options.ids ??
+    createUlidIdFactory(
+      (n) => randomBytes(n),
+      () => clock.nowMs(),
+    );
+  const persistence = createMemoryPersistence(db, ids, options.secrets ?? new Map());
+  const core = createContainerWith(persistence, { ...options, ids, clock });
+  return { ...core, db };
 }

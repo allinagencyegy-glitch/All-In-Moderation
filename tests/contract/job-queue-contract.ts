@@ -21,15 +21,26 @@ export interface QueueContractHarness {
   reset(): void;
 }
 
-const ACCOUNT = asId<AccountId>('acc_contract');
+/**
+ * The factory may be async.
+ *
+ * The in-memory adapter can build a fresh world synchronously; a real database cannot — it has to
+ * connect, truncate and re-seed. Allowing a Promise here is the smallest change that lets *one*
+ * suite describe both, which is the entire point of a contract test.
+ */
+export type QueueContractFactory = () => QueueContractHarness | Promise<QueueContractHarness>;
+
+export const CONTRACT_ACCOUNT_ID = 'acc_contract';
+
+const ACCOUNT = asId<AccountId>(CONTRACT_ACCOUNT_ID);
 const TRACE = asId<TraceId>('trc_contract');
 
-export function runJobQueueContract(name: string, create: () => QueueContractHarness): void {
+export function runJobQueueContract(name: string, create: QueueContractFactory): void {
   describe(`JobQueue contract: ${name}`, () => {
     let h: QueueContractHarness;
 
-    beforeEach(() => {
-      h = create();
+    beforeEach(async () => {
+      h = await create();
     });
 
     const enqueue = (
