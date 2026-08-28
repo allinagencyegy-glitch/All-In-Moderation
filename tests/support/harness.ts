@@ -24,7 +24,7 @@ import type { KnowledgeEntry } from '../../src/knowledge/domain/knowledge-entry.
 import type { AccountPackVersion } from '../../src/knowledge/domain/account-pack.ts';
 import { PACK_SCHEMA_VERSION } from '../../src/knowledge/domain/account-pack.ts';
 import type { IngestOutcome } from '../../src/moderation/application/ingest-webhook.ts';
-import type { Container } from '../../src/runtime/container.ts';
+import type { Container, CoreContainer } from '../../src/runtime/container.ts';
 import { createContainer } from '../../src/runtime/container.ts';
 import type { RuntimeConfig } from '../../src/runtime/config.ts';
 import type { JobType } from '../../src/operations/jobs/job.ts';
@@ -59,8 +59,16 @@ export interface SeededAccount {
   readonly packId: AccountPackVersionId | null;
 }
 
-export interface Harness {
-  readonly container: Container;
+/**
+ * The harness, parameterised by container type.
+ *
+ * The seeding and driving logic is identical whether the store is a Map or PostgreSQL - and that
+ * is the point. Sharing it means the Postgres suite exercises the same fixtures and the same call
+ * sequence as the Phase 0 suite, so a difference in outcome is a difference in the *adapter*
+ * rather than in how the two suites happen to be written.
+ */
+export interface HarnessOver<C extends CoreContainer> {
+  readonly container: C;
   readonly clock: TestClock;
   readonly provider: MockLlmProvider;
   readonly logs: ReturnType<typeof createMemoryLogger>['records'];
@@ -75,7 +83,9 @@ export interface Harness {
   drainTypes(types: readonly JobType[], workerId?: string): Promise<number>;
 }
 
-const TEST_CONFIG: RuntimeConfig = {
+export type Harness = HarnessOver<Container>;
+
+export const TEST_CONFIG: RuntimeConfig = {
   nodeEnv: 'test',
   role: 'all',
   logLevel: 'debug',
@@ -108,6 +118,16 @@ export function createHarness(overrides: { config?: Partial<RuntimeConfig> } = {
     random: () => 0.5,
   });
 
+  return createHarnessOver(container, clock, provider, records);
+}
+
+/** Wraps any already-composed container in the harness API. */
+export function createHarnessOver<C extends CoreContainer>(
+  container: C,
+  clock: TestClock,
+  provider: MockLlmProvider,
+  records: ReturnType<typeof createMemoryLogger>['records'],
+): HarnessOver<C> {
   let seedCounter = 0;
 
   return {

@@ -1,0 +1,213 @@
+name: verify
+
+# The gate Phase 01 asked for.
+#
+# Two of that phase's six findings were not defects in the platform but in the apparatus: no
+# complete `npm test` had ever finished, and `npm run verify` had never once been green. Both were
+# invisible because nobody ran the gate to completion, and the failure mode was a *hang* — which
+# looks like a slow build rather than a red one. So every timeout below is deliberate, and every
+# assertion exists to make "the proof did not actually run" impossible to mistake for "the proof
+# passed".
+
+on:
+  push:
+    # Branch filters only. With `branches` set, a tag push does not trigger the gate a second time.
+    branches: ['**']
+  pull_request:
+
+# One run per ref. A superseded push has nothing left to prove.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only, no secrets, no `pull_request_target`. This workflow has nothing to leak and no write
+# it could be tricked into performing.
+permissions:
+  contents: read
+
+env:
+  # The floor the tree may never fall below. Phase 01 closed at 251 (147 in-memory + 104
+  # PostgreSQL). Adding suites means raising this deliberately; it can never shrink by accident.
+  MIN_TESTS: '251'
+
+jobs:
+  verify:
+    name: format, lint, typecheck, tests on embedded PostgreSQL
+    # Pinned rather than `ubuntu-latest`. The embedded PostgreSQL binaries are the one dependency
+    # an image bump could break, and a gate that changes underneath you is not a gate.
+    runs-on: ubuntu-24.04
+    # The hard wall-clock ceiling. A test process that completes every assertion and then never
+    # exits — precisely the Phase 01 defect — burns this and fails red instead of hanging green.
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out the tree under test
+        uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          # package.json requires >=24; the repository was developed and proved on 24.16.
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        # `npm ci`, never `npm install`: the lockfile is the record of what was proved.
+        #
+        # Install scripts must run. `@embedded-postgres/linux-x64` ships a `postinstall` that
+        # hydrates the symlinks an npm tarball cannot carry, and two of them —
+        # `libicui18n.so.60` and `libicuuc.so.60` — are sonames the `postgres` binary names in
+        # its DT_NEEDED. Under `--ignore-scripts` the server cannot start at all.
+        run: npm ci
+
+      - name: Preflight — the embedded PostgreSQL binaries exist and execute on this runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin='node_modules/@embedded-postgres/linux-x64/native/bin'
+
+          if [ ! -d "$bin" ]; then
+            echo "::error::@embedded-postgres/linux-x64 is missing. The PostgreSQL proof cannot"
+            echo "::error::run here. Fix the runner or the dependency — do not weaken the suite."
+            exit 1
+          fi
+
+          # EmbeddedPostgres chmods these itself; doing it here means a permission problem
+          # surfaces in one second rather than four minutes into the suite.
+          chmod +x "$bin/initdb" "$bin/postgres"
+
+          # The definitive check: the binaries resolve their bundled libraries through their
+          # DT_RUNPATH and run. A missing shared object fails here, legibly.
+          "$bin/initdb" --version
+          "$bin/postgres" --version
+
+          # PostgreSQL refuses to initdb as root, and so does the harness. GitHub-hosted runners
+          # run as `runner`; a container-based runner would not.
+          if [ "$(id -u)" -eq 0 ]; then
+            echo "::error::running as root — embedded PostgreSQL cannot initdb here"
+            exit 1
+          fi
+          echo "preflight ok as $(id -un)"
+
+      - name: Verify — format, lint, typecheck, full test suite
+        shell: bash
+        # Below the job ceiling on purpose, so a hang is attributed to this step rather than
+        # cancelling the job at an arbitrary point. Raise this and the job ceiling together.
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          # The log lands outside the workspace: `prettier --check .` runs inside this very
+          # command, and a log file in the tree would be a file the gate creates and then judges.
+          npm run verify 2>&1 | tee "$RUNNER_TEMP/verify.log"
+
+      - name: Assert the PostgreSQL proof actually ran
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/verify.log"
+
+          # `node --test` reports through the spec reporter even when stdout is a pipe, so the
+          # summary is the last block of the log rather than a machine-readable document.
+          summary="$(tail -n 25 "$log")"
+          field() {
+            printf '%s\n' "$summary" | sed -n "s/.*[[:space:]]$1 \([0-9][0-9]*\)\$/\1/p" | tail -n 1
+          }
+          pass="$(field pass)"
+          fail="$(field fail)"
+          skipped="$(field skipped)"
+          echo "pass=${pass:-?} fail=${fail:-?} skipped=${skipped:-?} floor=$MIN_TESTS"
+
+          status=0
+          if [ -z "$pass" ]; then
+            echo "::error::no test summary in the log — the suite did not reach its own report"
+            status=1
+          fi
+          if [ "${fail:-1}" != '0' ]; then
+            echo "::error::${fail:-unknown} failing tests"
+            status=1
+          fi
+          # Catches `it.skip` and friends. It does NOT catch a skipped `describe`: the reporter
+          # counts a skipped suite's tests as zero rather than as skipped, so an entire suite can
+          # vanish while this counter still reads 0. The floor and the per-suite check below are
+          # what actually close that hole.
+          if [ "${skipped:-1}" != '0' ]; then
+            echo "::error::${skipped:-unknown} skipped tests — a skipped test is not a proof"
+            status=1
+          fi
+          if [ -n "$pass" ] && [ "$pass" -lt "$MIN_TESTS" ]; then
+            echo "::error::only $pass tests passed; the floor is $MIN_TESTS"
+            status=1
+          fi
+
+          # Counting is not enough: 251 in-memory tests would satisfy the floor while proving
+          # nothing about PostgreSQL. Every suite that needs a real cluster is named here, and
+          # each must appear as a suite that *ran*.
+          #
+          # The discriminator is the end of the line. A suite that ran closes with
+          #     ✔ postgres row-level security (10060.7718ms)
+          # and a suite that skipped itself closes with
+          #     ﹣ postgres row-level security (1.2633ms) # no PostgreSQL
+          # so requiring the line to end in `ms)` is what separates a proof from an excuse.
+          suites=(
+            'postgres migrations'
+            'postgres row-level security'
+            'postgres transactions'
+            'postgres concurrency'
+            'postgres duplicate ingest and bursts'
+            'postgres ownership compare-and-swap'
+            'postgres durability and failure injection'
+            'postgres knowledge validity'
+            'postgres multi-process workers'
+            'postgres security posture'
+            'postgres performance sanity'
+            'postgres vertical slice'
+            'JobQueue contract: postgres'
+          )
+          #
+          # Neither grep is `-q`: an early-exiting reader would SIGPIPE the writer, and under
+          # `pipefail` that reads as a failed pipeline — a false "suite did not run".
+          for suite in "${suites[@]}"; do
+            ran="$(grep -F "$suite (" "$log" | grep -E 'ms\)$' || true)"
+            if [ -z "$ran" ]; then
+              echo "::error::PostgreSQL suite did not run: $suite"
+              status=1
+            fi
+          done
+
+          exit "$status"
+
+      - name: Demo — end to end, and nothing may reach a network
+        shell: bash
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          npm run demo 2>&1 | tee "$RUNNER_TEMP/demo.log"
+          if ! grep -qF 'All outbound actions are SIMULATED.' "$RUNNER_TEMP/demo.log"; then
+            echo "::error::the demo did not report a fully simulated run"
+            exit 1
+          fi
+
+      - name: No PostgreSQL cluster outlived the test process
+        # Runs on cancellation too, which is when a hung cluster is most likely to be the cause.
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Matched on the harness's own mkdtemp prefix, so this can only ever find our clusters.
+          leftovers="$(pgrep -af 'all-in-moderation-pg-' || true)"
+          if [ -n "$leftovers" ]; then
+            echo "::error::a test cluster outlived the run:"
+            echo "$leftovers"
+            exit 1
+          fi
+          echo 'no stray embedded PostgreSQL processes'
+
+      - name: Keep the verification log
+        # A hang produces no diagnosable output at all unless the log survives the cancellation.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-log
+          path: ${{ runner.temp }}/verify.log
+          if-no-files-found: warn
+          retention-days: 14
