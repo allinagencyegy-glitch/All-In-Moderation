@@ -39,7 +39,19 @@ import type { JobType } from '../../src/operations/jobs/job.ts';
  */
 
 export const TEST_APP_SECRET = 'test-app-secret';
+export const TEST_VERIFY_TOKEN = 'test-verify-token';
 export const TEST_CREDENTIALS_REF = 'secret://test/app';
+
+/**
+ * The secret bundle every harness resolves.
+ *
+ * Both halves are present because the webhook lifecycle has two halves: the provider verifies the
+ * subscription with `verifyToken` once, then signs every delivery with `appSecret`. A fixture
+ * carrying only the second could not exercise the handshake at all.
+ */
+export const TEST_SECRETS = new Map([
+  [TEST_CREDENTIALS_REF, { appSecret: TEST_APP_SECRET, verifyToken: TEST_VERIFY_TOKEN }],
+]);
 
 export interface SeedOptions {
   readonly slug?: string;
@@ -90,7 +102,23 @@ export const TEST_CONFIG: RuntimeConfig = {
   role: 'all',
   logLevel: 'debug',
   outboundMode: 'SIMULATE',
-  worker: { leaseMs: 30_000, pollIntervalMs: 10, maxAttempts: 3 },
+  worker: {
+    leaseMs: 30_000,
+    pollIntervalMs: 10,
+    maxAttempts: 3,
+    concurrency: 1,
+    shutdownGraceMs: 2_000,
+  },
+  scheduler: { reaperIntervalMs: 50, relayIntervalMs: 50, relayBatchSize: 100 },
+  http: {
+    // Port 0 asks the OS for a free one, so suites can run in parallel and on a busy machine.
+    port: 0,
+    host: '127.0.0.1',
+    headersTimeoutMs: 5_000,
+    requestTimeoutMs: 5_000,
+    shutdownGraceMs: 2_000,
+  },
+  health: { inboundLagMs: 300_000, outboxLagMs: 300_000, deadLetterCeiling: 0 },
   llm: {
     providerId: 'mock',
     reasonModel: 'mock-model-1',
@@ -113,7 +141,7 @@ export function createHarness(overrides: { config?: Partial<RuntimeConfig> } = {
     ids,
     logger,
     provider,
-    secrets: new Map([[TEST_CREDENTIALS_REF, TEST_APP_SECRET]]),
+    secrets: TEST_SECRETS,
     // Deterministic backoff: tests assert on scheduled times, not on luck.
     random: () => 0.5,
   });

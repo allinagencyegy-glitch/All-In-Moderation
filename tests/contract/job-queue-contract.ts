@@ -290,6 +290,58 @@ export function runJobQueueContract(name: string, create: QueueContractFactory):
       assert.equal(claimed?.type, 'moderator.run');
     });
 
+    it('14. releaseLease returns a running job to READY, keeping its attempt', async () => {
+      const job = await enqueue('p1');
+      const claimed = await h.queue.claim({ workerId: 'w1', leaseMs: 60_000, now: h.clock.now() });
+      assert.ok(claimed);
+      assert.equal(claimed.attempt, 1);
+
+      // The partition is occupied while the lease is live.
+      assert.equal(
+        await h.queue.claim({ workerId: 'w2', leaseMs: 60_000, now: h.clock.now() }),
+        null,
+      );
+
+      const released = await h.queue.releaseLease(job.id, h.clock.now());
+      assert.equal(released, true);
+
+      const after = await h.queue.findById(job.id);
+      assert.equal(after?.state, 'READY');
+      assert.equal(after?.leaseOwner, null);
+      assert.equal(after?.leaseExpiresAt, null);
+      // Spent, not refunded: a shutdown loop must not be able to retry a poisonous job forever.
+      assert.equal(after?.attempt, 1);
+      assert.equal(after?.lastError?.code, 'LEASE_RELEASED');
+
+      // And the partition is immediately available, which is the entire point of releasing
+      // rather than waiting out the lease.
+      const reclaimed = await h.queue.claim({
+        workerId: 'w2',
+        leaseMs: 60_000,
+        now: h.clock.now(),
+      });
+      assert.equal(reclaimed?.id, job.id);
+      assert.equal(reclaimed?.attempt, 2);
+    });
+
+    it('15. releaseLease refuses a job this worker no longer owns', async () => {
+      const job = await enqueue('p1');
+      await h.queue.claim({ workerId: 'w1', leaseMs: 1_000, now: h.clock.now() });
+
+      // The lease lapses and the reaper requeues it — someone else owns the outcome now.
+      h.clock.advanceMs(2_000);
+      await h.queue.reapExpiredLeases(h.clock.now());
+      assert.equal((await h.queue.findById(job.id))?.state, 'READY');
+
+      // The late worker's release must be a no-op. Writing READY here would hand a partition
+      // back that a *second* worker may already be holding.
+      assert.equal(await h.queue.releaseLease(job.id, h.clock.now()), false);
+
+      const other = await h.queue.claim({ workerId: 'w2', leaseMs: 1_000, now: h.clock.now() });
+      assert.ok(other);
+      assert.equal(await h.queue.releaseLease(job.id, h.clock.now()), true);
+    });
+
     it('13. state counts are queryable for operator visibility', async () => {
       await enqueue('p1');
       await enqueue('p2');

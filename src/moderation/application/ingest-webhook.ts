@@ -4,7 +4,7 @@ import type { Clock } from '../../platform/clock.ts';
 import type { Logger } from '../../platform/logger.ts';
 import type { IdFactory, RawInboundEventId, TraceId } from '../../platform/ids.ts';
 import { ID_PREFIX } from '../../platform/ids.ts';
-import { sha256Hex } from '../../platform/hash.ts';
+import { safeEqual, sha256Hex } from '../../platform/hash.ts';
 import type { TransactionRunner } from '../../operations/transaction.ts';
 import type { JobQueue } from '../../operations/jobs/queue.ts';
 import type { WebhookSignatureVerifier } from '../domain/inbound.ts';
@@ -59,6 +59,35 @@ export type IngestOutcome =
   | { readonly status: 'CONNECTION_DISABLED'; readonly httpStatus: 200 }
   | { readonly status: 'PAYLOAD_TOO_LARGE'; readonly httpStatus: 413 };
 
+/**
+ * The provider's subscription handshake (`GET` on the same URL it will later `POST` to).
+ *
+ * It belongs here rather than in the HTTP layer for the same reason `ingest` does: resolving
+ * which tenant an opaque webhook id refers to, and which secret answers for it, is a domain
+ * question. The HTTP layer's whole job is to turn a query string into this request and an outcome
+ * into a status code.
+ */
+export interface SubscriptionVerificationRequest {
+  readonly publicWebhookId: string;
+  readonly mode: string | null;
+  readonly verifyToken: string | null;
+  readonly challenge: string | null;
+}
+
+export type SubscriptionVerificationOutcome =
+  | {
+      readonly status: 'VERIFIED';
+      /** Echoed back verbatim; the provider compares it byte for byte. */
+      readonly challenge: string;
+      readonly httpStatus: 200;
+    }
+  | { readonly status: 'UNKNOWN_CONNECTION'; readonly httpStatus: 404 }
+  | {
+      readonly status: 'REJECTED';
+      readonly reason: 'MODE' | 'MALFORMED' | 'NOT_CONFIGURED' | 'TOKEN';
+      readonly httpStatus: 403;
+    };
+
 export interface IngestConfig {
   readonly maxBodyBytes: number;
   readonly normalizeMaxAttempts: number;
@@ -86,12 +115,58 @@ export interface IngestWebhookDeps {
 
 export interface IngestWebhookService {
   ingest(request: IngestRequest): Promise<IngestOutcome>;
+  verifySubscription(
+    request: SubscriptionVerificationRequest,
+  ): Promise<SubscriptionVerificationOutcome>;
 }
 
 export function createIngestWebhookService(deps: IngestWebhookDeps): IngestWebhookService {
   const config = deps.config ?? DEFAULT_INGEST_CONFIG;
 
   return {
+    /**
+     * Answers the provider's subscription challenge.
+     *
+     * Three properties are deliberate. The token is compared in **constant time**, because it is
+     * a shared secret and a `===` on a secret leaks its prefix. A connection with **no configured
+     * token refuses**, rather than accepting anything — "unconfigured" must never be a skeleton
+     * key. And nothing is persisted: a handshake is not an inbound event, and writing a ledger row
+     * for every unauthenticated GET would hand an anonymous caller a write.
+     */
+    async verifySubscription(request) {
+      const connection = await deps.connections.findByPublicWebhookId(request.publicWebhookId);
+      if (!connection) {
+        deps.logger.warn('subscription verification for unknown connection', {
+          public_webhook_id: request.publicWebhookId,
+        });
+        return { status: 'UNKNOWN_CONNECTION', httpStatus: 404 };
+      }
+
+      const logger = deps.logger.child({
+        account_id: connection.accountId,
+        channel_connection_id: connection.id,
+        channel: connection.channel,
+      });
+
+      const reject = (
+        reason: 'MODE' | 'MALFORMED' | 'NOT_CONFIGURED' | 'TOKEN',
+      ): SubscriptionVerificationOutcome => {
+        logger.warn('subscription verification rejected', { reason });
+        return { status: 'REJECTED', reason, httpStatus: 403 };
+      };
+
+      if (request.mode !== 'subscribe') return reject('MODE');
+      if (!request.challenge || !request.verifyToken) return reject('MALFORMED');
+
+      const secret = await deps.secrets.resolve(connection.credentialsRef);
+      const expected = secret?.verifyToken;
+      if (!expected) return reject('NOT_CONFIGURED');
+      if (!safeEqual(expected, request.verifyToken)) return reject('TOKEN');
+
+      logger.info('subscription verified');
+      return { status: 'VERIFIED', challenge: request.challenge, httpStatus: 200 };
+    },
+
     async ingest(request) {
       const connection = await deps.connections.findByPublicWebhookId(request.publicWebhookId);
       if (!connection) {

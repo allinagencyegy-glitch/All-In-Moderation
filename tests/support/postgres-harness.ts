@@ -10,12 +10,7 @@ import type { CoreContainer } from '../../src/runtime/container.ts';
 import { createContainerWith } from '../../src/runtime/container.ts';
 import type { RuntimeConfig } from '../../src/runtime/config.ts';
 import type { HarnessOver } from './harness.ts';
-import {
-  TEST_APP_SECRET,
-  TEST_CONFIG,
-  TEST_CREDENTIALS_REF,
-  createHarnessOver,
-} from './harness.ts';
+import { TEST_CONFIG, TEST_SECRETS, createHarnessOver } from './harness.ts';
 import type { PostgresTestCluster } from './postgres.ts';
 import { truncateAll } from './postgres.ts';
 
@@ -82,9 +77,10 @@ export async function createPostgresHarness(
   const persistence = createPostgresPersistence({
     runtimeConnectionString: cluster.runtimeUrl,
     workerConnectionString: cluster.workerUrl,
+    relayConnectionString: cluster.relayUrl,
     ids,
     logger,
-    secrets: createMemorySecretResolver(new Map([[TEST_CREDENTIALS_REF, TEST_APP_SECRET]])),
+    secrets: createMemorySecretResolver(TEST_SECRETS),
     pool: {
       maxConnections: options.maxConnections ?? 8,
       ...(options.statementTimeoutMs !== undefined

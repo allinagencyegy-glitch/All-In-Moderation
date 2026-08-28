@@ -36,7 +36,22 @@ const CONFIG: RuntimeConfig = {
   role: 'all',
   logLevel: 'warn',
   outboundMode: 'SIMULATE',
-  worker: { leaseMs: 30_000, pollIntervalMs: 100, maxAttempts: 3 },
+  worker: {
+    leaseMs: 30_000,
+    pollIntervalMs: 100,
+    maxAttempts: 3,
+    concurrency: 1,
+    shutdownGraceMs: 5_000,
+  },
+  scheduler: { reaperIntervalMs: 10_000, relayIntervalMs: 5_000, relayBatchSize: 100 },
+  http: {
+    port: 0,
+    host: '127.0.0.1',
+    headersTimeoutMs: 10_000,
+    requestTimeoutMs: 20_000,
+    shutdownGraceMs: 5_000,
+  },
+  health: { inboundLagMs: 300_000, outboxLagMs: 300_000, deadLetterCeiling: 0 },
   llm: {
     providerId: 'mock',
     reasonModel: 'mock-model-1',

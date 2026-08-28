@@ -37,6 +37,8 @@ const RUNTIME_ROLE = 'app_runtime_login';
 const RUNTIME_PASSWORD = 'runtime-local-test';
 const WORKER_ROLE = 'app_worker_login';
 const WORKER_PASSWORD = 'worker-local-test';
+const RELAY_ROLE = 'app_relay_login';
+const RELAY_PASSWORD = 'relay-local-test';
 
 export interface PostgresTestCluster {
   readonly host: string;
@@ -48,6 +50,8 @@ export interface PostgresTestCluster {
   readonly runtimeUrl: string;
   /** Non-superuser, queue-only. This is what workers and the reaper use. */
   readonly workerUrl: string;
+  /** Non-superuser, outbox-only, one writable column. This is what the relay uses. */
+  readonly relayUrl: string;
 }
 
 async function freePort(): Promise<number> {
@@ -128,6 +132,9 @@ async function startShared(): Promise<SharedState> {
        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${WORKER_ROLE}') THEN
          CREATE ROLE ${WORKER_ROLE} LOGIN PASSWORD '${WORKER_PASSWORD}';
        END IF;
+       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${RELAY_ROLE}') THEN
+         CREATE ROLE ${RELAY_ROLE} LOGIN PASSWORD '${RELAY_PASSWORD}';
+       END IF;
      END $$`,
   );
   await admin.end();
@@ -157,6 +164,13 @@ async function startShared(): Promise<SharedState> {
       user: WORKER_ROLE,
       password: WORKER_PASSWORD,
     }),
+    relayUrl: buildConnectionString({
+      host: '127.0.0.1',
+      port,
+      database: TEST_DATABASE,
+      user: RELAY_ROLE,
+      password: RELAY_PASSWORD,
+    }),
   };
 
   // Migrate as the superuser (standing in for `app_migrator`), then grant the login roles their
@@ -174,6 +188,7 @@ async function startShared(): Promise<SharedState> {
   await adminDb.unscoped(async (client) => {
     await client.query(`GRANT app_runtime TO ${RUNTIME_ROLE}`);
     await client.query(`GRANT app_worker TO ${WORKER_ROLE}`);
+    await client.query(`GRANT app_relay TO ${RELAY_ROLE}`);
   }, 'test:grant-membership');
   await adminDb.close();
 
@@ -312,10 +327,11 @@ export async function truncateAll(adminUrl: string): Promise<void> {
 export interface PostgresTestDatabases {
   readonly runtime: PostgresDatabase;
   readonly worker: PostgresDatabase;
+  readonly relay: PostgresDatabase;
   close(): Promise<void>;
 }
 
-/** Two pools, two roles — the split the privilege model requires. */
+/** Three pools, three roles — the split the privilege model requires. */
 export function createTestDatabases(
   cluster: PostgresTestCluster,
   options: { maxConnections?: number; statementTimeoutMs?: number } = {},
@@ -335,12 +351,17 @@ export function createTestDatabases(
     logger,
     bypassTenantContext: true,
   });
+  const relay = createPostgresDatabase({
+    config: { ...base, connectionString: cluster.relayUrl },
+    logger,
+    bypassTenantContext: true,
+  });
   return {
     runtime,
     worker,
+    relay,
     async close() {
-      await runtime.close();
-      await worker.close();
+      await Promise.all([runtime.close(), worker.close(), relay.close()]);
     },
   };
 }

@@ -18,10 +18,13 @@ import { isUsable } from '../../knowledge/domain/knowledge-entry.ts';
 import type { DomainEventEnvelope } from '../../operations/events/contracts.ts';
 import type { EventOutbox } from '../../operations/events/outbox.ts';
 import { assertPublishable } from '../../operations/events/outbox.ts';
+import type { OutboxRelayStore } from '../../operations/events/relay.ts';
+import type { StoreProbe } from '../../operations/health.ts';
 import type { ChannelIdentity } from '../../moderation/domain/identity.ts';
 import type {
   ChannelConnectionRepository,
   ChannelIdentityRepository,
+  ChannelSecrets,
   ConversationRepository,
   HandoffRepository,
   MessageRepository,
@@ -442,12 +445,82 @@ export function createMemoryDeadLetterStore(db: MemoryDatabase): DeadLetterStore
 }
 
 /** Secrets by reference. In production this is a KMS/secret-manager client, never a table. */
-export function createMemorySecretResolver(secrets: ReadonlyMap<string, string>): SecretResolver {
+/**
+ * Secrets, held in memory and resolved by reference.
+ *
+ * A bare string is shorthand for "app secret only, no subscription handshake configured" — which
+ * is what every Phase 0/1 fixture meant and still means. Supplying the object form adds the
+ * verify token without changing a single existing caller.
+ */
+export function createMemorySecretResolver(
+  secrets: ReadonlyMap<string, string | ChannelSecrets>,
+): SecretResolver {
   return {
     resolve(credentialsRef) {
-      const appSecret = secrets.get(credentialsRef);
-      return Promise.resolve(appSecret ? { appSecret } : null);
+      const entry = secrets.get(credentialsRef);
+      if (entry === undefined) return Promise.resolve(null);
+      return Promise.resolve(typeof entry === 'string' ? { appSecret: entry } : entry);
     },
+  };
+}
+
+/**
+ * The in-memory relay store.
+ *
+ * Cross-tenant by construction — there is no RLS to work around here, which is exactly why the
+ * Postgres twin needs its own role and this one does not. The behaviour that must match is the
+ * conditional watermark: `markRelayed` returns false for an event already relayed, so the
+ * idempotency assertions in the shared tests mean the same thing against both adapters.
+ */
+export function createMemoryOutboxRelayStore(db: MemoryDatabase): OutboxRelayStore {
+  const pending = (): DomainEventEnvelope[] =>
+    db.tables.outbox
+      .filter((event) => !db.tables.relayedEventIds.has(event.eventId))
+      .sort((a, b) => {
+        const byTime = a.occurredAt.getTime() - b.occurredAt.getTime();
+        return byTime !== 0 ? byTime : a.eventId.localeCompare(b.eventId);
+      });
+
+  return {
+    listPending(limit) {
+      return Promise.resolve(pending().slice(0, limit));
+    },
+    markRelayed(eventId) {
+      if (db.tables.relayedEventIds.has(eventId)) return Promise.resolve(false);
+      db.tables.relayedEventIds.add(eventId);
+      return Promise.resolve(true);
+    },
+    backlog() {
+      const waiting = pending();
+      return Promise.resolve({
+        pending: waiting.length,
+        oldestAt: waiting[0]?.occurredAt ?? null,
+      });
+    },
+  };
+}
+
+/**
+ * The in-memory health probe.
+ *
+ * `ping` succeeds unconditionally, and that is the honest answer: an in-process Map cannot be
+ * unreachable. A probe that faked a failure mode the store does not have would make the health
+ * tests prove something about the fake rather than about the service.
+ */
+export function createMemoryStoreProbe(db: MemoryDatabase): StoreProbe {
+  const relay = createMemoryOutboxRelayStore(db);
+  return {
+    ping: () => Promise.resolve(),
+    inboundBacklog() {
+      const waiting = values(db.tables.rawEvents)
+        .filter((event) => event.state === 'RECEIVED' || event.state === 'NORMALIZING')
+        .sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime());
+      return Promise.resolve({
+        pending: waiting.length,
+        oldestAt: waiting[0]?.receivedAt ?? null,
+      });
+    },
+    outboxBacklog: () => relay.backlog(),
   };
 }
 

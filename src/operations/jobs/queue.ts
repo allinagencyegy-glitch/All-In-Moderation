@@ -50,6 +50,8 @@ export interface ClaimOptions {
  *   4. An expired lease returns the job to READY without losing its attempt count.
  *   5. Exhausted attempts move to DEAD_LETTERED and never back to READY.
  *   6. Enqueue participates in the caller's transaction — this is what makes ingest atomic.
+ *   7. `releaseLease` returns a RUNNING job to READY, keeping its attempt count, and refuses a
+ *      job it no longer owns.
  */
 export interface JobQueue {
   enqueue(request: EnqueueRequest): Promise<Job>;
@@ -63,6 +65,20 @@ export interface JobQueue {
     retryAt: Date | null,
     now: Date,
   ): Promise<void>;
+  /**
+   * Hands a live-leased job back to the queue without judging it.
+   *
+   * This is the graceful-shutdown path (Phase 02): a worker told to stop mid-job aborts the
+   * handler and gives the partition back immediately, instead of leaving the row RUNNING until
+   * the lease lapses. Waiting for expiry would be correct but slow — a rolling deploy would stall
+   * every in-flight conversation for a full lease period, and the reaper would then record it as
+   * a crash it was not.
+   *
+   * The attempt is *not* refunded. It was genuinely spent, and refunding it would let a shutdown
+   * loop retry a poisonous job forever. Returns false when the job is no longer RUNNING — the
+   * lease already lapsed and someone else owns the outcome.
+   */
+  releaseLease(jobId: JobId, now: Date): Promise<boolean>;
   /** Returns expired leases to READY. Runs on a timer; this is crash recovery (F-11). */
   reapExpiredLeases(now: Date): Promise<readonly JobId[]>;
   findById(jobId: JobId): Promise<Job | null>;

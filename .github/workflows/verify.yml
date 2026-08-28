@@ -27,8 +27,9 @@ permissions:
 
 env:
   # The floor the tree may never fall below. Phase 01 closed at 251 (147 in-memory + 104
-  # PostgreSQL). Adding suites means raising this deliberately; it can never shrink by accident.
-  MIN_TESTS: '251'
+  # PostgreSQL); Phase 02A adds the runtime shell, the HTTP edge, the outbox relay and health.
+  # Adding suites means raising this deliberately; it can never shrink by accident.
+  MIN_TESTS: '332'
 
 jobs:
   verify:
@@ -161,6 +162,10 @@ jobs:
             'postgres security posture'
             'postgres performance sanity'
             'postgres vertical slice'
+            'postgres http ingest'
+            'postgres outbox relay'
+            'postgres runtime shell'
+            'postgres application lifecycle'
             'JobQueue contract: postgres'
           )
           #
@@ -186,6 +191,65 @@ jobs:
             echo "::error::the demo did not report a fully simulated run"
             exit 1
           fi
+
+      - name: The process refuses to start without its three database roles
+        shell: bash
+        timeout-minutes: 2
+        # `npm start` is new in Phase 02A, and the single most expensive way it could be wrong is
+        # by quietly defaulting three privilege boundaries to one connection string. This asserts
+        # the refusal rather than trusting the code comment that describes it.
+        run: |
+          set -euo pipefail
+          set +e
+          out="$(node src/runtime/main.ts 2>&1)"
+          code=$?
+          set -e
+          echo "$out"
+          if [ "$code" -eq 0 ]; then
+            echo "::error::the process started with no database configuration"
+            exit 1
+          fi
+          if ! printf '%s' "$out" | grep -qF 'PG_RUNTIME_URL is required'; then
+            echo "::error::expected a CONFIG_MISSING failure naming PG_RUNTIME_URL"
+            exit 1
+          fi
+
+      - name: Live outbound is still refused at boot
+        shell: bash
+        timeout-minutes: 2
+        # The one safety flag that must never become a footgun. Phase 02A does not build a
+        # provider transport, so LIVE has to fail here for the same reason it did in Phase 00.
+        run: |
+          set -euo pipefail
+          set +e
+          out="$(OUTBOUND_MODE=LIVE node src/runtime/main.ts 2>&1)"
+          code=$?
+          set -e
+          echo "$out"
+          if [ "$code" -eq 0 ]; then
+            echo "::error::OUTBOUND_MODE=LIVE was accepted"
+            exit 1
+          fi
+          if ! printf '%s' "$out" | grep -qF 'OUTBOUND_LIVE_NOT_AUTHORIZED'; then
+            echo "::error::LIVE failed, but not for the right reason"
+            exit 1
+          fi
+
+      - name: No listener outlived the test process
+        if: always()
+        shell: bash
+        # Phase 02A is the first phase that binds a socket. A test server that survives its suite
+        # would make the *next* suite's ephemeral-port bind non-deterministic, and a leaked
+        # listener is exactly the kind of thing that only fails on a busy runner.
+        run: |
+          set -euo pipefail
+          leftovers="$(pgrep -af 'src/runtime/main.ts' || true)"
+          if [ -n "$leftovers" ]; then
+            echo "::error::an application process outlived the run:"
+            echo "$leftovers"
+            exit 1
+          fi
+          echo 'no stray application processes'
 
       - name: No PostgreSQL cluster outlived the test process
         # Runs on cancellation too, which is when a hung cluster is most likely to be the cause.

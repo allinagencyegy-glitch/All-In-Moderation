@@ -115,6 +115,10 @@ const LEASE_EXPIRED_EXHAUSTED = {
   code: 'LEASE_EXPIRED',
   message: 'worker lease expired with no attempts left',
 };
+const LEASE_RELEASED = {
+  code: 'LEASE_RELEASED',
+  message: 'worker shut down before completing',
+};
 
 export function createPostgresJobQueue(deps: {
   /**
@@ -384,6 +388,21 @@ export function createPostgresJobQueue(deps: {
           [jobId, JSON.stringify(error), retryAt],
         );
       }, 'jobs:fail');
+    },
+
+    async releaseLease(jobId, now) {
+      return await db.unscoped(async (client) => {
+        // `state = 'RUNNING'` is the whole guard. A worker whose lease already lapsed no longer
+        // owns the job — the reaper may have requeued it and a second worker may be running it —
+        // so releasing it would hand READY to a partition that is genuinely busy.
+        const result = await client.query(
+          `UPDATE jobs SET state = 'READY', run_at = $2::timestamptz, last_error = $3::jsonb,
+                           lease_owner = NULL, lease_expires_at = NULL
+            WHERE id = $1 AND state = 'RUNNING'`,
+          [jobId, now, JSON.stringify(LEASE_RELEASED)],
+        );
+        return (result.rowCount ?? 0) > 0;
+      }, 'jobs:releaseLease');
     },
 
     async reapExpiredLeases(now) {

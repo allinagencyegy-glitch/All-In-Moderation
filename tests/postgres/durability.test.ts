@@ -266,6 +266,15 @@ describe(
       // The most common production fault of all: the database restarts, or an admin disconnects a
       // backend. Misclassifying it as terminal would dead-letter healthy work during a failover.
       const victim = new pg.Client({ connectionString: cluster.runtimeUrl });
+      // A killed backend reaches the driver by two routes that race each other: the pending
+      // query rejects, and the client emits `error` asynchronously when the socket closes.
+      // Whichever wins, the *other* still happens — and an `error` event with no listener is
+      // fatal in Node, which made this test fail intermittently for reasons unrelated to what it
+      // asserts. Capturing the event is what makes it deterministic; the assertion is unchanged.
+      let asyncError: unknown = null;
+      victim.on('error', (error: unknown) => {
+        asyncError ??= error;
+      });
       await victim.connect();
       const pid = await victim
         .query<{ pid: number }>('SELECT pg_backend_pid() AS pid')
@@ -275,10 +284,13 @@ describe(
         await client.query('SELECT pg_terminate_backend($1)', [pid]);
       });
 
-      const failure = await victim.query('SELECT 1').then(
+      const queryError = await victim.query('SELECT 1').then(
         () => null,
         (error: unknown) => error,
       );
+      // The asynchronous event carries PostgreSQL's own 57P01; the query rejection may be the
+      // derived "not queryable" symptom, so prefer the cause when both arrived.
+      const failure = asyncError ?? queryError;
       assert.ok(failure, 'the terminated backend really did fail');
 
       const { isTransientPgError } = await import('../../src/adapters/postgres/errors.ts');
@@ -287,6 +299,11 @@ describe(
         true,
         'a lost connection must be retried, never dead-lettered',
       );
+      // Both routes must classify the same way. A worker that retried one and dead-lettered the
+      // other would behave differently depending on socket timing.
+      if (queryError && asyncError) {
+        assert.equal(isTransientPgError(queryError), true, 'the derived symptom is retryable too');
+      }
       await victim.end().catch(() => undefined);
     });
 
