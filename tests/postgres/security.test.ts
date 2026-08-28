@@ -278,8 +278,8 @@ describe('postgres security posture', { skip: available ? false : 'no PostgreSQL
 
   it('the tenancy-resolution function exposes two identifiers and nothing else', async () => {
     const seeded = await h.seedAccount();
-    // The one SECURITY DEFINER function in the schema. Its whole justification is that it is
-    // narrow: an unguessable id in, two ids out. No credentials_ref, no settings, no payload.
+    // Its whole justification is that it is narrow: an unguessable id in, two ids out. No
+    // credentials_ref, no settings, no payload.
     const returned = await asRuntime(null, async (client) => {
       const result = await client.query('SELECT * FROM app_resolve_webhook_connection($1)', [
         seeded.connection.publicWebhookId,
@@ -287,27 +287,60 @@ describe('postgres security posture', { skip: available ? false : 'no PostgreSQL
       return result.fields.map((f) => f.name);
     });
     assert.deepEqual(returned, ['connection_id', 'account_id']);
+  });
 
+  it('the inbound-backlog function returns an aggregate and cannot return a row', async () => {
+    // The second, and last, hole in RLS. "Oldest unprocessed inbound event" is a cross-tenant
+    // question asked by the least-authenticated surface in the system, so the alternative — a
+    // cross-tenant grant on `raw_inbound_events` — would be far worse. There is no row to leak
+    // because the function never selects one, and a later edit that tried to return one would
+    // have to change this signature and this test.
+    const returned = await withAdminClient(cluster.adminUrl, async (client) => {
+      const result = await client.query('SELECT * FROM app_inbound_backlog()');
+      return result.fields.map((f) => f.name);
+    });
+    assert.deepEqual(returned, ['pending', 'oldest_received_at']);
+
+    // Granted to the queue-facing role alone. The runtime role serves tenant traffic and has no
+    // business asking a cross-tenant question.
+    await assert.rejects(
+      () => asRuntime(null, (client) => client.query('SELECT * FROM app_inbound_backlog()')),
+      (error: unknown) => (error as { code?: string }).code === '42501',
+      'only app_worker may execute the backlog aggregate',
+    );
+  });
+
+  it('every SECURITY DEFINER function is enumerated, justified and search_path-pinned', async () => {
     const definers = await withAdminClient(cluster.adminUrl, async (client) => {
       const result = await client.query<{ proname: string; proconfig: string[] | null }>(
         `SELECT p.proname, p.proconfig FROM pg_proc p
            JOIN pg_namespace n ON n.oid = p.pronamespace
-          WHERE n.nspname = 'public' AND p.prosecdef`,
+          WHERE n.nspname = 'public' AND p.prosecdef
+          ORDER BY p.proname`,
       );
       return result.rows;
     });
+
+    // Each of these is a deliberate hole in RLS, and this list is the review gate: adding one
+    // means editing this test, and somebody has to review that edit.
+    //
+    //   app_resolve_webhook_connection  ingest must resolve tenancy *before* it has tenancy
+    //                                   (ADR-006). Opaque id in, two ids out.
+    //   app_inbound_backlog             a count and a timestamp, for the health endpoint.
     assert.deepEqual(
       definers.map((d) => d.proname),
-      ['app_resolve_webhook_connection'],
+      ['app_inbound_backlog', 'app_resolve_webhook_connection'],
       'every SECURITY DEFINER function is a hole in RLS and must be justified one at a time',
     );
-    assert.ok(
-      definers[0]!.proconfig?.some((c) => c.startsWith('search_path=')),
-      'an unpinned search_path in a SECURITY DEFINER function is a privilege-escalation bug',
-    );
+    for (const definer of definers) {
+      assert.ok(
+        definer.proconfig?.some((c) => c.startsWith('search_path=')),
+        `${definer.proname}: an unpinned search_path in a SECURITY DEFINER function is a privilege-escalation bug`,
+      );
+    }
   });
 
-  it('the runtime and worker roles are distinct and neither is a superuser', async () => {
+  it('the runtime, worker and relay roles are distinct and none is a superuser', async () => {
     const roles = await withAdminClient(cluster.adminUrl, async (client) => {
       const result = await client.query<{
         rolname: string;
@@ -316,15 +349,22 @@ describe('postgres security posture', { skip: available ? false : 'no PostgreSQL
         rolcreatedb: boolean;
       }>(
         `SELECT rolname, rolsuper, rolbypassrls, rolcreatedb FROM pg_roles
-          WHERE rolname IN ('app_runtime','app_worker','app_migrator',
-                            'app_runtime_login','app_worker_login')
+          WHERE rolname IN ('app_runtime','app_worker','app_relay','app_migrator',
+                            'app_runtime_login','app_worker_login','app_relay_login')
           ORDER BY rolname`,
       );
       return result.rows;
     });
 
     const byName = new Map(roles.map((r) => [r.rolname, r]));
-    for (const name of ['app_runtime', 'app_worker', 'app_runtime_login', 'app_worker_login']) {
+    for (const name of [
+      'app_runtime',
+      'app_worker',
+      'app_relay',
+      'app_runtime_login',
+      'app_worker_login',
+      'app_relay_login',
+    ]) {
       const role = byName.get(name);
       assert.ok(role, `${name} should exist`);
       assert.equal(role.rolsuper, false, `${name} must not be a superuser`);

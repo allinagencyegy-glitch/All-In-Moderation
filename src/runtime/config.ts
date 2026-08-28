@@ -25,6 +25,34 @@ export interface RuntimeConfig {
     readonly leaseMs: number;
     readonly pollIntervalMs: number;
     readonly maxAttempts: number;
+    /** How many worker loops one process runs. Each claims independently. */
+    readonly concurrency: number;
+    /**
+     * How long a shutdown waits for in-flight work before aborting it and handing the lease back.
+     * Longer than a typical job, shorter than an orchestrator's kill timeout — a shutdown that
+     * outlives `SIGKILL` is not a graceful shutdown, it is a slow crash.
+     */
+    readonly shutdownGraceMs: number;
+  };
+  readonly scheduler: {
+    /** The reaper's timer. Crash recovery nobody triggers is crash recovery that does not happen. */
+    readonly reaperIntervalMs: number;
+    readonly relayIntervalMs: number;
+    readonly relayBatchSize: number;
+  };
+  readonly http: {
+    readonly port: number;
+    readonly host: string;
+    /** Caps how long a client may take to send headers and then a whole request. */
+    readonly headersTimeoutMs: number;
+    readonly requestTimeoutMs: number;
+    /** Grace for in-flight requests when shutting the listener down. */
+    readonly shutdownGraceMs: number;
+  };
+  readonly health: {
+    readonly inboundLagMs: number;
+    readonly outboxLagMs: number;
+    readonly deadLetterCeiling: number;
   };
   readonly llm: {
     readonly providerId: string;
@@ -46,6 +74,21 @@ const asInt = (value: string | undefined, fallback: number): number => {
       'CONFIG_INVALID',
       `Expected a non-negative integer, received '${value}'`,
     );
+  }
+  return parsed;
+};
+
+/**
+ * For values where zero is not a sane setting.
+ *
+ * A poll interval of 0 is a busy loop; a batch size of 0 is a relay that never relays. Both look
+ * like configuration and behave like an outage, so they are rejected at boot rather than
+ * discovered in production.
+ */
+const asPositiveInt = (value: string | undefined, fallback: number): number => {
+  const parsed = asInt(value, fallback);
+  if (parsed === 0) {
+    throw new TerminalError('CONFIG_INVALID', `Expected a positive integer, received '0'`);
   }
   return parsed;
 };
@@ -83,6 +126,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig 
       leaseMs: asInt(env['WORKER_LEASE_MS'], 60_000),
       pollIntervalMs: asInt(env['WORKER_POLL_INTERVAL_MS'], 1_000),
       maxAttempts: asInt(env['WORKER_MAX_ATTEMPTS'], 5),
+      concurrency: asPositiveInt(env['WORKER_CONCURRENCY'], 2),
+      shutdownGraceMs: asInt(env['WORKER_SHUTDOWN_GRACE_MS'], 15_000),
+    },
+    scheduler: {
+      reaperIntervalMs: asPositiveInt(env['REAPER_INTERVAL_MS'], 10_000),
+      relayIntervalMs: asPositiveInt(env['RELAY_INTERVAL_MS'], 5_000),
+      relayBatchSize: asPositiveInt(env['RELAY_BATCH_SIZE'], 100),
+    },
+    http: {
+      port: asInt(env['HTTP_PORT'], 8080),
+      host: env['HTTP_HOST'] ?? '0.0.0.0',
+      headersTimeoutMs: asPositiveInt(env['HTTP_HEADERS_TIMEOUT_MS'], 10_000),
+      requestTimeoutMs: asPositiveInt(env['HTTP_REQUEST_TIMEOUT_MS'], 20_000),
+      shutdownGraceMs: asInt(env['HTTP_SHUTDOWN_GRACE_MS'], 10_000),
+    },
+    health: {
+      inboundLagMs: asInt(env['HEALTH_INBOUND_LAG_MS'], 300_000),
+      outboxLagMs: asInt(env['HEALTH_OUTBOX_LAG_MS'], 300_000),
+      deadLetterCeiling: asInt(env['HEALTH_DEAD_LETTER_CEILING'], 0),
     },
     llm: {
       providerId: env['LLM_PROVIDER'] ?? 'mock',

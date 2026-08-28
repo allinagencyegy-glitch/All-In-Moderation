@@ -1,28 +1,33 @@
 # All In Moderation
 
-A multi-client, 24/7 AI moderation platform for social messaging. This repository is the
-**Phase 0 foundation**: the domain model, the architecture, the safety mechanisms, and the tests
-that prove them — with no network I/O of any kind.
+A multi-client, 24/7 AI moderation platform for social messaging. Three phases are complete: the
+domain model and its safety mechanisms (Phase 00), those mechanisms proven against real PostgreSQL
+(Phase 01), and the continuously-running application that hosts them (Phase 02A).
 
-Phase 0 exists to make one claim defensible before any real traffic exists:
+The whole thing exists to make one claim defensible before any real traffic exists:
 
 > A customer message is never lost, never answered twice, never answered by the AI while a human
 > is holding the conversation, and never answered from knowledge the account has not approved.
 
 Everything here is in service of that sentence.
 
-## What Phase 0 is, and is not
+**Still no network.** There is no Meta transport, no real language model and no outbound delivery.
+`OUTBOUND_MODE=LIVE` is refused at boot, and the webhook endpoint is exercised with locally signed
+payloads.
 
-| Built and proven                                                  | Deliberately absent                                                        |
-| ----------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Domain model, state machines, invariants                          | HTTP server / webhook endpoint                                             |
-| Durable job queue contract, worker, lease recovery, dead letters  | PostgreSQL adapter (the in-memory one satisfies the same contract)         |
-| Tenancy: branded scope tokens, per-row assertions, RLS in the DDL | Live Meta transport — outbound is `SIMULATE` only                          |
-| Knowledge Gate, Account Packs, policy/authority matrix            | Real LLM provider — a deterministic mock stands in                         |
-| Ownership model with compare-and-swap concurrency control         | Operator UI                                                                |
-| SQL migrations (structurally verified)                            | Any client's business rules — those live in Account Packs, never in `src/` |
+## What is built, and what is not
 
-**No code in this repository contacts a network.** `OUTBOUND_MODE=LIVE` is refused at boot.
+| Built and proven                                                        | Deliberately absent                                                        |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Domain model, state machines, invariants                                | Live Meta transport — outbound is `SIMULATE` only                          |
+| Durable job queue on PostgreSQL: leases, partition exclusivity, DLQ     | Real LLM provider — a deterministic mock stands in                         |
+| Tenancy: branded scope tokens, per-row assertions, enforced RLS         | Operator UI                                                                |
+| Knowledge Gate, Account Packs, policy/authority matrix                  | A real destination for relayed domain events                               |
+| Ownership model with compare-and-swap concurrency control               | `event_deliveries` per-subscription fan-out (schema only)                  |
+| **A process that runs**: poll loops, timers, graceful shutdown          | Outbound delivery of any kind                                              |
+| **An HTTP webhook endpoint**: raw-body signatures, size cap, fast `200` | Any client's business rules — those live in Account Packs, never in `src/` |
+| **The outbox relay**, on its own least-privileged database role         |                                                                            |
+| **Health endpoints**: process, database, queue depth, DLQ, inbound lag  |                                                                            |
 
 ## Quick start
 
@@ -32,7 +37,33 @@ npm run demo      # end-to-end vertical slice, no network, no database
 npm run verify    # format:check + lint + typecheck + the whole test suite
 ```
 
-Requires Node.js >= 24 (TypeScript runs natively; there is no build step).
+Requires Node.js >= 24 (TypeScript runs natively; there is no build step). The PostgreSQL suites
+start a disposable embedded cluster themselves, so no local database is needed.
+
+## Running the application
+
+```bash
+export PG_RUNTIME_URL=postgres://app_runtime_login:...@localhost:5432/all_in_moderation
+export PG_WORKER_URL=postgres://app_worker_login:...@localhost:5432/all_in_moderation
+export PG_RELAY_URL=postgres://app_relay_login:...@localhost:5432/all_in_moderation
+npm start
+```
+
+Three URLs, three roles, no fallback — collapsing them would quietly merge three privilege
+boundaries into one, so the process refuses to start rather than guess. `APP_ROLE` selects what
+this process does: `web` (the listener), `worker` (poll loops, the reaper timer, the relay timer)
+or `all`.
+
+| Endpoint             | Method | What it does                                                       |
+| -------------------- | ------ | ------------------------------------------------------------------ |
+| `/webhooks/meta/:id` | `GET`  | Subscription handshake; echoes `hub.challenge` on a matching token |
+| `/webhooks/meta/:id` | `POST` | Raw-body ingest: verify, persist, enqueue, acknowledge             |
+| `/health/live`       | `GET`  | Liveness. Never touches the database                               |
+| `/health/ready`      | `GET`  | Readiness. `503` while shutting down or while the store is down    |
+| `/health/status`     | `GET`  | Queue depth, dead letters, inbound lag, outbox lag, uptime         |
+
+`SIGTERM`/`SIGINT` drains: readiness flips to `503`, the listener closes, timers stop, workers
+finish or hand their leases back, and the pools close last. A second signal exits immediately.
 
 ## The demo
 
@@ -51,6 +82,7 @@ step. It is the fastest way to see the design working:
 
 | Command             | What it does                                            |
 | ------------------- | ------------------------------------------------------- |
+| `npm start`         | The application: HTTP listener, workers, timers         |
 | `npm run demo`      | End-to-end vertical slice with narration                |
 | `npm test`          | Every suite (unit, integration, architecture, contract) |
 | `npm run typecheck` | `tsc --noEmit` under a strict config                    |
@@ -75,11 +107,11 @@ src/
   operations/    jobs (queue port, worker, reaper), outbox, audit, dead letters, transactions
   moderation/    the conversation domain and its application services
   integrations/  Meta webhook parser + signature verifier, mock LLM, CRM contract
-  adapters/      in-memory database, repositories, job queue
-  runtime/       config, composition root, demo
-db/migrations/   PostgreSQL DDL (0001 core, 0002 moderation, 0003 operations, 0004 knowledge)
+  adapters/      in-memory and PostgreSQL: database, repositories, job queue, migrator
+  runtime/       config, composition root, application shell, worker loop, scheduler, http, demo
+db/migrations/   PostgreSQL DDL - core, moderation, operations, knowledge, roles, relay + health
 docs/            architecture review, domain model, state machines, failure register, ADRs
-tests/           unit, integration, architecture, contract
+tests/           unit, integration, architecture, contract, postgres
 ```
 
 The dependency graph is **enforced by a test**, not by convention:
@@ -108,17 +140,27 @@ runtime — client business content belongs in an Account Pack (ADR-010).
   ever visible. After it, so citations are checked for containment and re-validated — a price can
   expire mid-run.
 - **Every early exit is a recorded state with a reason.** "The AI did nothing" is never silent.
+- **Raw bytes survive the HTTP layer.** Nothing parses a webhook body before its signature is
+  verified, the size cap is enforced _while reading_ rather than after buffering, and a body that
+  is not valid UTF-8 is refused rather than silently repaired into different bytes.
+- **Privilege is a database role, not a code comment.** `app_runtime` is RLS-bound to one tenant,
+  `app_worker` sees the queue and two tables, `app_relay` sees the outbox and may write exactly
+  one column. Each limit is asserted by a test that connects as that role and gets `42501`.
+- **Shutdown releases work instead of failing it.** An interrupted job goes back to `READY` with
+  its lease cleared, not to the dead-letter queue.
 
 ## Documentation
 
-| Document                                                       | What it answers                                         |
-| -------------------------------------------------------------- | ------------------------------------------------------- |
-| [docs/ARCHITECTURE-REVIEW.md](docs/ARCHITECTURE-REVIEW.md)     | Why the system is shaped this way                       |
-| [docs/DOMAIN-MODEL.md](docs/DOMAIN-MODEL.md)                   | Entities, relationships, invariants                     |
-| [docs/STATE-MACHINES.md](docs/STATE-MACHINES.md)               | Every lifecycle and its legal transitions               |
-| [docs/FAILURE-MODE-REGISTER.md](docs/FAILURE-MODE-REGISTER.md) | The F-numbers referenced throughout the code            |
-| [docs/adr/](docs/adr/)                                         | The ten decisions, their options, and revisit triggers  |
-| [docs/HANDOFF-PHASE-00.md](docs/HANDOFF-PHASE-00.md)           | What is proven, what is not, and what Phase 1 should do |
+| Document                                                       | What it answers                                        |
+| -------------------------------------------------------------- | ------------------------------------------------------ |
+| [docs/ARCHITECTURE-REVIEW.md](docs/ARCHITECTURE-REVIEW.md)     | Why the system is shaped this way                      |
+| [docs/DOMAIN-MODEL.md](docs/DOMAIN-MODEL.md)                   | Entities, relationships, invariants                    |
+| [docs/STATE-MACHINES.md](docs/STATE-MACHINES.md)               | Every lifecycle and its legal transitions              |
+| [docs/FAILURE-MODE-REGISTER.md](docs/FAILURE-MODE-REGISTER.md) | The F-numbers referenced throughout the code           |
+| [docs/adr/](docs/adr/)                                         | The ten decisions, their options, and revisit triggers |
+| [docs/HANDOFF-PHASE-00.md](docs/HANDOFF-PHASE-00.md)           | The foundation, proven against an in-memory store      |
+| [docs/HANDOFF-PHASE-01.md](docs/HANDOFF-PHASE-01.md)           | The PostgreSQL proof, and the six defects it found     |
+| [docs/HANDOFF-PHASE-02A.md](docs/HANDOFF-PHASE-02A.md)         | The runtime shell: what runs, what is still simulated  |
 
 ## Configuration
 
@@ -129,7 +171,11 @@ message. Secrets are never read from config — they are resolved by reference t
 
 ## Status
 
-Phase 0 is complete against its in-memory adapter. **The SQL migrations have been verified
-structurally but have not been executed against a real PostgreSQL server**, and the Postgres
-adapter does not exist yet. See [docs/HANDOFF-PHASE-00.md](docs/HANDOFF-PHASE-00.md) for the full
-account of what the tests do and do not prove.
+**Phase 02A: the application shell is built and proven.** The process polls PostgreSQL, reaps
+expired leases on a timer, relays the outbox, serves signed webhooks over HTTP, reports its own
+health, and shuts down cleanly. Every suite runs against a real PostgreSQL server in CI on a
+GitHub-hosted runner.
+
+**Live Meta connection is not authorised.** There is no provider transport, no outbound delivery
+and no real model. See [docs/HANDOFF-PHASE-02A.md](docs/HANDOFF-PHASE-02A.md) for the full account
+of what is proven, what remains simulated, and what has to be true before that changes.

@@ -33,6 +33,20 @@ export interface Worker {
   runOnce(): Promise<boolean>;
   /** Drains until the queue yields nothing, bounded so a bug cannot spin forever. */
   drain(maxJobs?: number): Promise<number>;
+  /** The job this worker is handling right now, or null. Read by graceful shutdown. */
+  current(): Job | null;
+  /**
+   * Aborts the handler running right now and marks the outcome as a shutdown rather than a
+   * failure.
+   *
+   * Without the distinction, an interrupted handler would surface as a plain `Error` from the
+   * abort — which `retryabilityOf` classifies TERMINAL, which dead-letters the job. Restarting a
+   * process would then dead-letter one conversation per worker, and a rolling deploy would look
+   * like a spate of unrecoverable failures. Interrupted work is released, not judged.
+   */
+  interrupt(): void;
+  /** True once `interrupt` has been called; the drain loop stops claiming. */
+  interrupted(): boolean;
 }
 
 export function createWorker(deps: {
@@ -59,7 +73,13 @@ export function createWorker(deps: {
   const retryPolicy = options.retryPolicy ?? DEFAULT_RETRY_POLICY;
   const random = options.random ?? Math.random;
 
+  let currentJob: Job | null = null;
+  let currentController: AbortController | null = null;
+  let interrupted = false;
+
   const runOnce = async (): Promise<boolean> => {
+    // A worker told to stop must not open new work, even if a caller loops one more time.
+    if (interrupted) return false;
     const claimOptions = {
       workerId: options.workerId,
       leaseMs: options.leaseMs,
@@ -100,12 +120,25 @@ export function createWorker(deps: {
       () => controller.abort(new Error('lease expired')),
       options.leaseMs,
     );
+    currentJob = job;
+    currentController = controller;
+    // An interrupt that arrived between the claim and here would otherwise be missed, and the
+    // shutdown would wait out a handler it had already asked to stop.
+    if (interrupted) controller.abort(new Error('worker interrupted'));
 
     try {
       await handler(job, controller.signal);
       await queue.complete(job.id, clock.now());
       jobLogger.debug('job completed');
     } catch (error) {
+      if (interrupted) {
+        // Shutdown, not failure. Hand the partition straight back so the next process picks the
+        // job up immediately instead of waiting out a lease that nothing is holding. The attempt
+        // is still spent — see `JobQueue.releaseLease`.
+        const released = await queue.releaseLease(job.id, clock.now());
+        jobLogger.warn('job released on shutdown', { released });
+        return true;
+      }
       const described = describeError(error);
       const retryability = retryabilityOf(error);
       const retryAt = nextRetryAt(
@@ -129,12 +162,23 @@ export function createWorker(deps: {
       await queue.fail(job.id, described, retryAt, clock.now());
     } finally {
       clearTimeout(leaseTimer);
+      currentJob = null;
+      currentController = null;
     }
     return true;
   };
 
   return {
     runOnce,
+    current: () => currentJob,
+    interrupted: () => interrupted,
+    interrupt() {
+      if (interrupted) return;
+      interrupted = true;
+      // Abort *before* the flag is read anywhere else, so a handler that honours its signal
+      // unwinds into the release path rather than into the retry path.
+      currentController?.abort(new Error('worker interrupted'));
+    },
     async drain(maxJobs = 1000) {
       let processed = 0;
       while (processed < maxJobs) {

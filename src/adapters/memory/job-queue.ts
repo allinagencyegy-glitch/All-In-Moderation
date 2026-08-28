@@ -178,6 +178,23 @@ export function createMemoryJobQueue(db: MemoryDatabase): JobQueue {
       return Promise.resolve();
     },
 
+    releaseLease(jobId, now) {
+      const job = tables.jobs.get(jobId);
+      // Not RUNNING means the lease already lapsed and the reaper (or another worker) owns the
+      // outcome. Writing READY here would resurrect a job someone else is holding.
+      if (!job || job.state !== 'RUNNING') return Promise.resolve(false);
+      assertJobTransition(job.state, 'READY');
+      tables.jobs.set(jobId, {
+        ...job,
+        state: 'READY',
+        runAt: now,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        lastError: { code: 'LEASE_RELEASED', message: 'worker shut down before completing' },
+      });
+      return Promise.resolve(true);
+    },
+
     reapExpiredLeases(now) {
       const reclaimed: JobId[] = [];
       for (const job of values(tables.jobs)) {

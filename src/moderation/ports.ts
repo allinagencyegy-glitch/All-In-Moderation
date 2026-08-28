@@ -134,6 +134,20 @@ export interface HandoffRepository {
  * Keeping the indirection means a database dump does not contain app secrets, and rotation is a
  * secret-store operation rather than a migration.
  */
+export interface ChannelSecrets {
+  /** Signs and verifies the webhook body. Never logged, never stored on the connection row. */
+  readonly appSecret: string;
+  /**
+   * The provider's subscription-handshake token.
+   *
+   * Separate from `appSecret` because it is a different secret with a different blast radius: it
+   * only ever proves "this URL is ours" during subscription setup, and it travels in a query
+   * string — a place an app secret must never appear. Absent means this connection declines the
+   * handshake rather than accepting any token.
+   */
+  readonly verifyToken?: string;
+}
+
 export interface SecretResolver {
-  resolve(credentialsRef: string): Promise<{ readonly appSecret: string } | null>;
+  resolve(credentialsRef: string): Promise<ChannelSecrets | null>;
 }

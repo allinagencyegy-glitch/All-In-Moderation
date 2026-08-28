@@ -10,6 +10,7 @@ import { scopeForAccount } from '../core/account/index.ts';
 import type {
   ChannelConnectionRepository,
   ChannelIdentityRepository,
+  ChannelSecrets,
   ConversationRepository,
   HandoffRepository,
   MessageRepository,
@@ -26,6 +27,10 @@ import type {
 import type { AuditLog } from '../operations/audit.ts';
 import type { DeadLetterStore } from '../operations/dead-letter.ts';
 import type { EventOutbox } from '../operations/events/outbox.ts';
+import type { OutboxRelay, OutboxRelayStore, RelayTarget } from '../operations/events/relay.ts';
+import { createOutboxRelay, createSimulatedRelayTarget } from '../operations/events/relay.ts';
+import type { HealthService, StoreProbe } from '../operations/health.ts';
+import { createHealthService } from '../operations/health.ts';
 import type { JobQueue } from '../operations/jobs/queue.ts';
 import type { TransactionRunner } from '../operations/transaction.ts';
 import { createKnowledgeGate } from '../knowledge/application/knowledge-gate.ts';
@@ -68,8 +73,10 @@ import {
   createMemoryMessageRepository,
   createMemoryModeratorRunRepository,
   createMemoryOutboundActionRepository,
+  createMemoryOutboxRelayStore,
   createMemoryRawInboundEventRepository,
   createMemorySecretResolver,
+  createMemoryStoreProbe,
 } from '../adapters/memory/repositories.ts';
 import type { RuntimeConfig } from './config.ts';
 import { loadConfig } from './config.ts';
@@ -105,6 +112,10 @@ export interface Persistence {
   readonly packs: AccountPackRepository;
   readonly knowledgeGaps: KnowledgeGapRepository;
   readonly outbox: EventOutbox;
+  /** The cross-tenant read side of the outbox. Its own role on Postgres (0007). */
+  readonly relay: OutboxRelayStore;
+  /** The two cross-tenant aggregates the health snapshot needs, and a real round trip. */
+  readonly probe: StoreProbe;
   readonly audit: AuditLog;
   readonly deadLetters: DeadLetterStore;
   readonly queue: JobQueue;
@@ -143,6 +154,14 @@ export interface CoreContainer {
    * operator visibility and human escalation a worker failure gets (ADR-004).
    */
   readonly reaper: Reaper;
+  /**
+   * The outbox relay. Runs on a timer rather than as a queued job: it is cross-tenant by nature,
+   * and a per-account job row would need an account to belong to before it could ask which
+   * accounts have pending events.
+   */
+  readonly relay: OutboxRelay;
+  readonly relayTarget: RelayTarget;
+  readonly health: HealthService;
   createWorker(
     workerId: string,
     options?: { leaseMs?: number; types?: readonly JobType[] },
@@ -160,15 +179,23 @@ export interface ContainerOptions {
   readonly ids?: IdFactory;
   readonly logger?: Logger;
   readonly provider?: LlmProvider | MockLlmProvider;
-  readonly secrets?: ReadonlyMap<string, string>;
+  readonly secrets?: ReadonlyMap<string, string | ChannelSecrets>;
   readonly random?: () => number;
+  /**
+   * Where relayed domain events go. Absent means the simulated sink, which reaches no network —
+   * the only destination authorised in this phase.
+   */
+  readonly relayTarget?: RelayTarget;
+  /** When this process started, for uptime. Injected so a health snapshot is assertable. */
+  readonly startedAt?: Date;
+  readonly isShuttingDown?: () => boolean;
 }
 
 /** Assembles the in-memory persistence bundle. The Phase 0 default. */
 export function createMemoryPersistence(
   db: MemoryDatabase,
   ids: IdFactory,
-  secrets: ReadonlyMap<string, string>,
+  secrets: ReadonlyMap<string, string | ChannelSecrets>,
 ): Persistence {
   return {
     transactions: db.transactions,
@@ -185,6 +212,8 @@ export function createMemoryPersistence(
     packs: createMemoryAccountPackRepository(db),
     knowledgeGaps: createMemoryKnowledgeGapRepository(db),
     outbox: createMemoryEventOutbox(db),
+    relay: createMemoryOutboxRelayStore(db),
+    probe: createMemoryStoreProbe(db),
     audit: createMemoryAuditLog(db, ids),
     deadLetters: createMemoryDeadLetterStore(db),
     queue: createMemoryJobQueue(db),
@@ -390,6 +419,11 @@ export function createContainerWith(
     // `outbound.dispatch` is intentionally absent: Phase 0 records SIMULATED actions and never
     // dispatches. Registering a stub that "succeeds" would make the pipeline look healthy while
     // nothing reached a customer.
+    //
+    // `outbox.relay` is absent for a different reason. A job row carries an `account_id`, and the
+    // relay's first question is "which accounts have pending events?" — which a per-tenant job
+    // cannot ask. It runs on a timer instead (see `runtime/application.ts`), and nothing enqueues
+    // the job type. Should one ever appear, the worker dead-letters it rather than dropping it.
   };
 
   /**
@@ -421,6 +455,35 @@ export function createContainerWith(
     logger: logger.child({ component: 'reaper' }),
   });
 
+  const relayTarget =
+    options.relayTarget ?? createSimulatedRelayTarget(logger.child({ component: 'relay-target' }));
+  const relay = createOutboxRelay({
+    store: persistence.relay,
+    target: relayTarget,
+    clock,
+    logger: logger.child({ component: 'relay' }),
+    batchSize: config.scheduler.relayBatchSize,
+  });
+
+  const health = createHealthService({
+    probe: persistence.probe,
+    queue,
+    deadLetters,
+    clock,
+    startedAt: options.startedAt ?? clock.now(),
+    identity: {
+      role: config.role,
+      outboundMode: config.outboundMode,
+      nodeEnv: config.nodeEnv,
+    },
+    isShuttingDown: options.isShuttingDown ?? (() => false),
+    thresholds: {
+      inboundLagMs: config.health.inboundLagMs,
+      outboxLagMs: config.health.outboxLagMs,
+      deadLetterCeiling: config.health.deadLetterCeiling,
+    },
+  });
+
   return {
     config,
     clock,
@@ -449,6 +512,9 @@ export function createContainerWith(
     connections,
     rawEvents,
     reaper,
+    relay,
+    relayTarget,
+    health,
     createWorker(workerId, workerOptions) {
       return createWorker({
         queue,

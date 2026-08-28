@@ -2,7 +2,7 @@
   "name": "all-in-moderation",
   "version": "0.0.0",
   "private": true,
-  "description": "All In Moderation — multi-client, 24/7 AI moderation platform (Phase 0 foundation).",
+  "description": "All In Moderation — multi-client, 24/7 AI moderation platform (Phase 02A runtime shell).",
   "type": "module",
   "engines": {
     "node": ">=24.0.0"
@@ -15,6 +15,7 @@
     "format:check": "prettier --check .",
     "test": "node --test --experimental-test-isolation=none \"tests/**/*.test.ts\"",
     "test:watch": "node --test --watch \"tests/**/*.test.ts\"",
+    "start": "node src/runtime/main.ts",
     "demo": "node src/runtime/demo.ts",
     "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test"
   },

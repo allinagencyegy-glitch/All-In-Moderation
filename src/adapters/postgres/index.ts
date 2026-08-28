@@ -19,7 +19,9 @@ import {
   createPostgresMessageRepository,
   createPostgresModeratorRunRepository,
   createPostgresOutboundActionRepository,
+  createPostgresOutboxRelayStore,
   createPostgresRawInboundEventRepository,
+  createPostgresStoreProbe,
 } from './repositories.ts';
 
 /**
@@ -34,11 +36,22 @@ import {
  * `enqueue` runs on the *runtime* pool so that it joins the caller's transaction. That is what
  * keeps ADR-004's central claim true: the job row and the domain write commit together, or
  * neither does.
+ *
+ * Phase 02 adds a **third** pool for the same reason there was a second. The outbox relay reads
+ * pending events across tenants and moves a watermark; on the runtime pool RLS matches nothing,
+ * and on the worker pool it would mean granting the queue role a table it has no business
+ * touching. `app_relay` is granted one table and one writable column (0007), so the relay's blast
+ * radius is the outbox and stops there.
  */
 
 export interface PostgresPersistenceOptions {
   readonly runtimeConnectionString: string;
   readonly workerConnectionString: string;
+  /**
+   * Required, not optional. Defaulting it to the worker or runtime string would silently widen a
+   * privilege boundary — the single most expensive kind of convenience.
+   */
+  readonly relayConnectionString: string;
   readonly ids: IdFactory;
   readonly logger: Logger;
   readonly secrets: SecretResolver;
@@ -57,10 +70,17 @@ export function createPostgresPersistence(options: PostgresPersistenceOptions) {
     logger: options.logger.child({ pool: 'worker' }),
     bypassTenantContext: true,
   });
+  const relayDb: PostgresDatabase = createPostgresDatabase({
+    // A relay is a background trickle, not a request path; two connections is generous.
+    config: { ...base, maxConnections: 2, connectionString: options.relayConnectionString },
+    logger: options.logger.child({ pool: 'relay' }),
+    bypassTenantContext: true,
+  });
 
   return {
     runtimeDb,
     workerDb,
+    relayDb,
     transactions: runtimeDb.transactions,
     accounts: createPostgresAccountRepository(runtimeDb),
     connections: createPostgresChannelConnectionRepository(runtimeDb),
@@ -74,14 +94,24 @@ export function createPostgresPersistence(options: PostgresPersistenceOptions) {
     knowledge: createPostgresKnowledgeRepository(runtimeDb),
     packs: createPostgresAccountPackRepository(runtimeDb),
     knowledgeGaps: createPostgresKnowledgeGapRepository(runtimeDb, options.ids),
-    outbox: createPostgresEventOutbox(runtimeDb),
+    outbox: createPostgresEventOutbox(runtimeDb, relayDb),
+    relay: createPostgresOutboxRelayStore(relayDb),
+    probe: createPostgresStoreProbe({ workerDb, relayDb }),
     audit: createPostgresAuditLog(runtimeDb, options.ids),
     deadLetters: createPostgresDeadLetterStore(workerDb, options.ids),
     queue: createPostgresJobQueue({ enqueueDb: runtimeDb, workerDb, ids: options.ids }),
     secrets: options.secrets,
     async close(): Promise<void> {
-      await runtimeDb.close();
-      await workerDb.close();
+      // Every pool, even if one throws. A pool left open holds sockets and keeps the event loop
+      // alive, which is precisely the "finished but never exits" failure Phase 01 spent a finding
+      // on.
+      const results = await Promise.allSettled([
+        runtimeDb.close(),
+        workerDb.close(),
+        relayDb.close(),
+      ]);
+      const failed = results.find((r) => r.status === 'rejected');
+      if (failed) throw failed.reason as Error;
     },
   };
 }

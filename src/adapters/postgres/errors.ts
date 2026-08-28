@@ -89,7 +89,11 @@ export function isTransientPgError(error: unknown): boolean {
     // Driver-level socket failures arrive without a SQLSTATE. They are the most retryable thing
     // there is, so recognise them by name rather than defaulting them to terminal.
     const message = error instanceof Error ? error.message : '';
-    return /ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|Connection terminated|socket hang up/i.test(
+    // `Client has encountered a connection error` is the driver's *derived* symptom: once a
+    // socket dies, every subsequent call on that client fails with it rather than with the
+    // SQLSTATE that killed it. Classifying it terminally would make retryability depend on
+    // whether the query or the socket close won a race.
+    return /ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|Connection terminated|socket hang up|encountered a connection error/i.test(
       message,
     );
   }

@@ -36,6 +36,8 @@ import type { KnowledgeEntry } from '../../knowledge/domain/knowledge-entry.ts';
 import type { AccountPackVersion, PackSectionKey } from '../../knowledge/domain/account-pack.ts';
 import type { DomainEventEnvelope, DomainEventType } from '../../operations/events/contracts.ts';
 import type { EventOutbox } from '../../operations/events/outbox.ts';
+import type { OutboxRelayStore } from '../../operations/events/relay.ts';
+import type { StoreProbe } from '../../operations/health.ts';
 import { assertPublishable } from '../../operations/events/outbox.ts';
 import type { ChannelConnection } from '../../moderation/domain/channel.ts';
 import type {
@@ -1665,7 +1667,20 @@ const toEnvelope = (row: OutboxRow): DomainEventEnvelope => ({
 const OUTBOX_SELECT = `id, account_id, type, version, subject_type, subject_id, data, trace_id,
   occurred_at`;
 
-export function createPostgresEventOutbox(db: PostgresDatabase): EventOutbox {
+/**
+ * The tenant-scoped write side of the outbox.
+ *
+ * `relayDb` is the *relay* pool, and it is required rather than optional. `markRelayed` is a
+ * cross-tenant write by nature — its signature carries no scope because a relay does not have one
+ * — so on the runtime pool it would match zero rows under RLS and the relay would redeliver
+ * forever. Phase 01 threw `NotImplementedError` here rather than fail that quietly; Phase 02
+ * hands it the role that can actually do the write. See `createPostgresOutboxRelayStore`.
+ */
+export function createPostgresEventOutbox(
+  db: PostgresDatabase,
+  relayDb: PostgresDatabase,
+): EventOutbox {
+  const relay = createPostgresOutboxRelayStore(relayDb);
   return {
     async append(scope, event) {
       // Validate before touching the database, exactly as the in-memory outbox does: publishing an
@@ -1723,20 +1738,102 @@ export function createPostgresEventOutbox(db: PostgresDatabase): EventOutbox {
       );
     },
 
-    markRelayed() {
-      /*
-       * The relay is a cross-tenant background process and this signature carries no scope, so
-       * there is no account context to establish and RLS matches nothing — the update would
-       * succeed with zero rows and the relay would loop forever, redelivering.
-       *
-       * Failing loudly is the only safe option. There is no caller yet (`outbox.relay` has no
-       * registered handler in Phase 0), and the fix belongs with the relay itself: either a
-       * relay role, as `app_worker` is to the queue, or a scoped signature.
-       */
-      return Promise.reject(
-        new NotImplementedError('EventOutbox.markRelayed on PostgreSQL', 'Phase 2'),
-      );
+    async markRelayed(eventId) {
+      // Delegates to the relay pool. The `false` return (already relayed) is swallowed here
+      // because this signature cannot express it; callers that need to distinguish a first relay
+      // from a duplicate use `OutboxRelayStore.markRelayed` directly, which is what the relay
+      // service does.
+      await relay.markRelayed(eventId, new Date());
     },
+  };
+}
+
+/**
+ * The cross-tenant read side of the outbox, on the relay role.
+ *
+ * Every statement here runs unscoped, which is only safe because of what `app_relay` is granted:
+ * `SELECT` on `domain_event_outbox` and `UPDATE (relayed_at)` on the same table, and nothing
+ * else in the database. Migration 0007 is the real enforcement; this file is the caller.
+ */
+export function createPostgresOutboxRelayStore(db: PostgresDatabase): OutboxRelayStore {
+  return {
+    async listPending(limit) {
+      return await db.unscoped(async (client) => {
+        // `(occurred_at, id)` matches the partial relay index, and the tiebreaker keeps the order
+        // total: two events in the same millisecond must still relay in a stable order.
+        const result = await client.query<OutboxRow>(
+          `SELECT ${OUTBOX_SELECT} FROM domain_event_outbox
+            WHERE relayed_at IS NULL ORDER BY occurred_at, id LIMIT $1`,
+          [limit],
+        );
+        return result.rows.map(toEnvelope);
+      }, 'relay:listPending');
+    },
+
+    async markRelayed(eventId, now) {
+      return await db.unscoped(async (client) => {
+        // `relayed_at IS NULL` is the idempotency guard, and it is the reason this returns a
+        // boolean at all: two relays racing on the same event must produce exactly one "first
+        // delivery" and one "already done", not two of either.
+        const result = await client.query(
+          `UPDATE domain_event_outbox SET relayed_at = $2::timestamptz
+            WHERE id = $1 AND relayed_at IS NULL`,
+          [eventId, now],
+        );
+        return (result.rowCount ?? 0) > 0;
+      }, 'relay:markRelayed');
+    },
+
+    async backlog() {
+      return await db.unscoped(async (client) => {
+        const result = await client.query<{ pending: string; oldest: Date | null }>(
+          `SELECT count(*)::text AS pending, min(occurred_at) AS oldest
+             FROM domain_event_outbox WHERE relayed_at IS NULL`,
+        );
+        const row = result.rows[0];
+        return { pending: Number(row?.pending ?? '0'), oldestAt: row?.oldest ?? null };
+      }, 'relay:backlog');
+    },
+  };
+}
+
+/**
+ * The store-shaped half of the health snapshot.
+ *
+ * Two pools, because the two questions belong to two roles. The queue-facing role answers "is the
+ * database there?" and "how far behind is ingest?"; the relay role answers "how far behind is the
+ * outbox?". Neither is given reach it did not already have for its own work — which is the point
+ * of asking them separately rather than opening a third door.
+ */
+export function createPostgresStoreProbe(deps: {
+  workerDb: PostgresDatabase;
+  relayDb: PostgresDatabase;
+}): StoreProbe {
+  const relay = createPostgresOutboxRelayStore(deps.relayDb);
+  return {
+    async ping() {
+      await deps.workerDb.unscoped(async (client) => {
+        await client.query('SELECT 1');
+      }, 'health:ping');
+    },
+
+    async inboundBacklog() {
+      return await deps.workerDb.unscoped(async (client) => {
+        // A SECURITY DEFINER aggregate (0007), not a table read. The worker role has no grant on
+        // `raw_inbound_events` at all, so this endpoint cannot be turned into a row reader by a
+        // later edit — the function returns a count and a timestamp or nothing.
+        const result = await client.query<{ pending: string; oldest_received_at: Date | null }>(
+          'SELECT pending, oldest_received_at FROM app_inbound_backlog()',
+        );
+        const row = result.rows[0];
+        return {
+          pending: Number(row?.pending ?? '0'),
+          oldestAt: row?.oldest_received_at ?? null,
+        };
+      }, 'health:inboundBacklog');
+    },
+
+    outboxBacklog: () => relay.backlog(),
   };
 }
 
