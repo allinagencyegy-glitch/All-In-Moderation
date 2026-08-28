@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Logger } from '../../platform/logger.ts';
 import { TerminalError } from '../../platform/errors.ts';
+import { quoteIdentifier } from './bootstrap.ts';
 import type { PgClient, PostgresDatabase } from './client.ts';
 import { translatePgError } from './errors.ts';
 
@@ -136,11 +137,50 @@ export function createMigrator(deps: {
   db: PostgresDatabase;
   directory: string;
   logger: Logger;
+  /**
+   * The privilege role to assume for the whole run, e.g. `app_migrator`.
+   *
+   * This is the difference between a documented role model and a real one. `app_migrator` is
+   * `NOLOGIN` and `BYPASSRLS`, and PostgreSQL does **not** inherit role *attributes* through
+   * membership — a login identity that is a member of `app_migrator` still has `rolbypassrls =
+   * false` until it issues `SET ROLE`. Two things depend on that:
+   *
+   *   * **Ownership.** Objects belong to `current_user` at creation time. Without the `SET ROLE`
+   *     every table would be owned by whichever login identity happened to run the migration, so
+   *     the schema's owner would be a credential rather than a role.
+   *   * **`BYPASSRLS`.** Every table `FORCE`s row-level security, and the two SECURITY DEFINER
+   *     resolvers execute as their owner. If that owner cannot bypass RLS, webhook tenancy
+   *     resolution returns no rows and ingest fails closed for every delivery.
+   *
+   * `SET LOCAL`, so it reverts with the transaction and cannot leak into a pooled connection.
+   * Left undefined the run proceeds as the connecting role, which is what a superuser-driven
+   * bootstrap of a scratch database wants.
+   */
+  assumeRole?: string;
   /** Injected so migration timing is deterministic in tests. */
   now?: () => number;
 }): Migrator {
   const { db, directory, logger } = deps;
   const nowMs = deps.now ?? (() => Date.now());
+  // Validated at construction: an invalid identifier must fail before a connection is opened,
+  // not as a syntax error halfway through a migration run.
+  const assumeRoleSql =
+    deps.assumeRole === undefined ? null : `SET LOCAL ROLE ${quoteIdentifier(deps.assumeRole)}`;
+
+  const assume = async (client: PgClient): Promise<void> => {
+    if (assumeRoleSql === null) return;
+    try {
+      await client.query(assumeRoleSql);
+    } catch (error) {
+      throw new TerminalError(
+        'MIGRATION_ROLE_UNAVAILABLE',
+        `Cannot SET ROLE ${String(deps.assumeRole)}. The connecting role must be a member of it; ` +
+          'run the bootstrap first (docs/DEPLOYMENT-BOOTSTRAP.md).',
+        { role: String(deps.assumeRole) },
+        { cause: error },
+      );
+    }
+  };
 
   const readApplied = async (client: PgClient): Promise<Map<string, AppliedMigration>> => {
     await client.query(HISTORY_DDL);
@@ -166,6 +206,7 @@ export function createMigrator(deps: {
   return {
     async applied() {
       return await db.unscoped(async (client) => {
+        await assume(client);
         const map = await readApplied(client);
         return [...map.values()];
       }, 'migrations:applied');
@@ -174,6 +215,7 @@ export function createMigrator(deps: {
     async pending() {
       const files = loadMigrations(directory);
       return await db.unscoped(async (client) => {
+        await assume(client);
         const done = await readApplied(client);
         return files.filter((file) => !done.has(file.version)).map((file) => file.filename);
       }, 'migrations:pending');
@@ -188,6 +230,7 @@ export function createMigrator(deps: {
       // normal case, not the exotic one, and `CREATE TABLE` racing itself produces a confusing
       // duplicate-object error rather than a clean wait.
       return await db.unscoped(async (lockClient) => {
+        await assume(lockClient);
         await lockClient.query('SELECT pg_advisory_xact_lock($1)', [MIGRATION_ADVISORY_LOCK]);
         const done = await readApplied(lockClient);
 

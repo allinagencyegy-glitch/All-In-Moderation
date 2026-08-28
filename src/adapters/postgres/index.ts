@@ -122,4 +122,19 @@ export { createPostgresDatabase, DEFAULT_POSTGRES_CONFIG } from './client.ts';
 export type { PostgresConfig, PostgresDatabase } from './client.ts';
 export { createMigrator, loadMigrations } from './migrator.ts';
 export type { Migrator, MigrationResult } from './migrator.ts';
+export {
+  MIGRATION_ROLE,
+  MIN_PASSWORD_LENGTH,
+  REQUIRED_EXTENSIONS,
+  ROLE_MODEL,
+  bootstrapDatabase,
+  quoteIdentifier,
+} from './bootstrap.ts';
+export type {
+  BootstrapCapabilities,
+  BootstrapOptions,
+  BootstrapReport,
+  RoleKey,
+  RoleModelEntry,
+} from './bootstrap.ts';
 export { allocateNextSeq } from './repositories.ts';

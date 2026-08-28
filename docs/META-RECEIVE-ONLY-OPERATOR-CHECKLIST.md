@@ -18,9 +18,12 @@ number at this system. Read these four statements and confirm each one is what y
    inbound ledger and as conversation messages. If the account carries real customer traffic, this
    is a processing activity with the obligations that implies.
 2. **The platform will not send anything.** There is no outbound HTTP client anywhere in `src/`, no
-   Meta API base URL, and no access token is stored or requested. Every moderator decision is
-   recorded as `SIMULATED`. This is asserted by `tests/architecture/no-outbound-meta.test.ts`,
-   which fails the build if the capability ever appears.
+   Meta API base URL, and the service stores no access token and has no field to store one in.
+   Every moderator decision is recorded as `SIMULATED`. This is asserted by
+   `tests/architecture/no-outbound-meta.test.ts`, which fails the build if the capability ever
+   appears. You will, however, need a send-capable token **in your own hands, briefly** to subscribe
+   the surface in step 8 — Meta has no unauthenticated way to do that. §3 separates the three kinds
+   of credential and says exactly where each may and may not live.
 3. **You should use a test or explicitly authorised account first.** A Meta app in Development
    mode, with a Page you control and no live customers, proves the whole chain with nothing at
    stake. Do that before pointing a client's real Page at anything.
@@ -33,14 +36,14 @@ If any of the four is not true yet, stop here.
 
 ## 1. What you need to have
 
-| Thing                                                                                | Why                                                                    | Where it comes from                          |
-| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- | -------------------------------------------- |
-| A Meta developer account                                                             | Everything below lives in one                                          | developers.facebook.com                      |
-| A Meta **app**                                                                       | Owns the webhook subscription and the app secret                       | App Dashboard → Create App                   |
-| A **public HTTPS URL** for this service                                              | Meta will not call a private address, and requires a valid certificate | Your deployment; a tunnel is fine for a test |
-| A test/authorised **Page**, **IG professional account**, or **WhatsApp test number** | The surface being shadowed                                             | You control it                               |
-| Admin rights on that surface                                                         | Subscribing requires them                                              | You already have them, or ask                |
-| A running deployment with a database                                                 | The ledger is where the proof lands                                    | `npm start` against PostgreSQL               |
+| Thing                                                                                | Why                                                                    | Where it comes from                                                                                                                           |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| A Meta developer account                                                             | Everything below lives in one                                          | developers.facebook.com                                                                                                                       |
+| A Meta **app**                                                                       | Owns the webhook subscription and the app secret                       | App Dashboard → Create App                                                                                                                    |
+| A **public HTTPS URL** for this service                                              | Meta will not call a private address, and requires a valid certificate | Your deployment; a tunnel is fine for a test                                                                                                  |
+| A test/authorised **Page**, **IG professional account**, or **WhatsApp test number** | The surface being shadowed                                             | You control it                                                                                                                                |
+| Admin rights on that surface                                                         | Subscribing requires them                                              | You already have them, or ask                                                                                                                 |
+| A running deployment with a database                                                 | The ledger is where the proof lands                                    | **`docs/DEPLOYMENT-BOOTSTRAP.md`** — an empty cluster is not enough: four database credentials have to be created before `npm start` can work |
 
 ### App type
 
@@ -79,16 +82,60 @@ delete a customer's comment. Do not request it in this phase.
 
 ---
 
-## 3. Secrets — what they are and where they go
+## 3. Credentials — three kinds, and only one of them reaches this service
 
-Three distinct secrets, with three different blast radii. None of them is ever written to the
-database, and none appears in a log.
+Phase 02B's version of this section said a Page / IG / WhatsApp access token was "not needed. Do
+not obtain one." That is right about the **runtime** and wrong about the **setup**, and the
+difference matters: step 8 below subscribes a Page or a WhatsApp Business Account by calling the
+Graph API, and Meta will not accept that call unauthenticated. An operator who follows the old text
+literally gets stuck at step 8 with no explanation, and the natural next move — pasting a token
+into an environment file "just to get past it" — is exactly the outcome the sentence was written to
+prevent.
 
-| Secret                                | What it does                                                                                                  | Where it lives                                       |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| **App secret**                        | Meta signs every webhook body with it (`X-Hub-Signature-256`). We verify.                                     | `WEBHOOK_SECRETS` env, under a `secret://` reference |
-| **Verify token**                      | A string _you invent_. Meta echoes it once during the subscription handshake so we can prove the URL is ours. | Same bundle                                          |
-| **Page / IG / WhatsApp access token** | Would authorise sending.                                                                                      | **Not needed. Do not obtain one. Do not store one.** |
+So the three kinds are separated by name.
+
+### A. SETUP CREDENTIAL — temporary, operator-held, never reaches this service
+
+|                              |                                                                                                                                                                                                                                          |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **What**                     | A Page access token, an Instagram-linked Page token, or a WhatsApp system-user token — whichever the surface needs.                                                                                                                      |
+| **Why**                      | Subscribing an app to a surface is an authenticated Graph API write: `POST /{page-id}/subscribed_apps`, `POST /{waba-id}/subscribed_apps`. The dashboard's Page-subscription control does the same call for you with the same authority. |
+| **Where it lives**           | In the Graph API Explorer session, or in **your** shell for the length of one `curl`. Nowhere else.                                                                                                                                      |
+| **Where it must never live** | `WEBHOOK_SECRETS`. `.env`. Any table in PostgreSQL. Any field of `channel_connections`. Any argument to `meta-connection provision`. There is no field for it, and adding one is out of scope for this phase by design.                  |
+| **Lifetime**                 | Minutes. Use a short-lived token and let it expire; if you used a long-lived one, revoke or invalidate it once step 8 succeeds. Rotating the app secret invalidates outstanding tokens.                                                  |
+| **Blast radius if leaked**   | Large — it authorises sending as the surface. That is precisely why it does not live anywhere this service can reach.                                                                                                                    |
+
+The service never sees it, never asks for it, and could not use it: there is no outbound HTTP
+client in `src/` and no Meta API base URL, which `tests/architecture/no-outbound-meta.test.ts`
+fails the build over.
+
+> If your organisation forbids an operator holding a send-capable token even briefly, the
+> alternative is to have whoever administers the Page perform step 8 in the App Dashboard UI. Same
+> authority, same audit trail, no token in a terminal.
+
+### B. RUNTIME WEBHOOK SECRETS — long-lived, held by the service, receive-only
+
+| Secret           | What it does                                                                                                    | Where it lives                                   |
+| ---------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| **App secret**   | Meta signs every webhook body with it (`X-Hub-Signature-256`). We verify, in constant time, over the raw bytes. | `WEBHOOK_SECRETS`, under a `secret://` reference |
+| **Verify token** | A string _you invent_. Meta echoes it once during the subscription handshake so we can prove the URL is ours.   | The same bundle                                  |
+
+These two are the only credentials this service holds for Meta, and neither can send anything. The
+database stores a `credentials_ref` pointer and never the secret — asserted by the security suite,
+which fails if any column name matching `%secret%`, `%token%` or `%password%` appears without a
+`_ref` suffix.
+
+### C. FUTURE OUTBOUND CREDENTIAL — does not exist yet
+
+A stored, refreshable Page / IG / WhatsApp access token behind the `SecretResolver` port is what a
+future sending phase would need. It does not exist, there is no schema for it, and introducing one
+is explicitly out of scope here. See §12.
+
+### The distinction in one line
+
+> **A** authorises Meta to start calling us, and is yours for five minutes.
+> **B** proves the calls are really from Meta, and is the service's forever.
+> **C** would authorise us to call Meta, and does not exist.
 
 ### Choosing a verify token
 
@@ -123,10 +170,16 @@ provisioning time so you find out now rather than during the handshake.
 # --- safety: unchanged from every prior phase -----------------------------------------------
 OUTBOUND_MODE=SIMULATE          # LIVE is refused at boot with OUTBOUND_LIVE_NOT_AUTHORIZED
 
-# --- the three database roles: separate on purpose, no single-URL fallback -------------------
+# --- the three runtime database identities: separate on purpose, no single-URL fallback ------
+# Created by the bootstrap in step 5. These are *login identities*; the privilege roles they are
+# members of (app_runtime, app_worker, app_relay) are NOLOGIN and cannot appear in a URL.
 PG_RUNTIME_URL=postgres://app_runtime_login:...@host:5432/all_in_moderation
 PG_WORKER_URL=postgres://app_worker_login:...@host:5432/all_in_moderation
 PG_RELAY_URL=postgres://app_relay_login:...@host:5432/all_in_moderation
+
+# NOT here, deliberately: PG_MIGRATOR_URL and PG_BOOTSTRAP_URL. A process that can change the
+# schema while serving webhooks is one compromise away from a data-loss event rather than a
+# data-exposure one. See docs/DEPLOYMENT-BOOTSTRAP.md.
 
 # --- the webhook secret bundle ---------------------------------------------------------------
 WEBHOOK_SECRETS={"secret://<client>/meta":{"appSecret":"...","verifyToken":"..."}}
@@ -145,7 +198,9 @@ npm ci
 node --run start          # or: npm start
 ```
 
-That is the whole command. There is no receive-only flag, because there is nothing to turn off:
+That is the whole command **once the database exists**. From a genuinely empty PostgreSQL cluster
+the full sequence — `CREATE DATABASE`, bootstrap, migrate, three credentials, start, verify — is
+`docs/DEPLOYMENT-BOOTSTRAP.md` §4, and step 5 below is the short form of it. There is no receive-only flag, because there is nothing to turn off:
 receive-only is the default `transport_mode` on every connection, it is what provisioning writes,
 and a database CHECK constraint refuses a receive-only row that holds a send capability.
 
@@ -159,12 +214,32 @@ curl -s localhost:8080/health/status | jq '{status, process, transport}'
 
 ---
 
-## 5. Migrate the database
+## 5. Create the database roles, then migrate
+
+An empty PostgreSQL cluster is not a deployable one. The migrations create four **privilege roles**
+— `app_migrator`, `app_runtime`, `app_worker`, `app_relay` — and every one of them is `NOLOGIN`:
+they hold grants, they are not credentials. The identities that actually connect
+(`app_migrator_login` and friends) are created by a separate, privileged bootstrap step.
+
+Phase 02B's version of this section showed `PG_MIGRATOR_URL=postgres://app_migrator:...`, which can
+never work — that role has no `LOGIN` attribute and no password. The full procedure, the privilege
+it needs, and how long that privilege has to be held, are in:
+
+> **`docs/DEPLOYMENT-BOOTSTRAP.md`**
+
+The short version:
 
 ```bash
-# As the migrator role — never as app_runtime, which cannot change the schema by design.
-PG_MIGRATOR_URL=postgres://app_migrator:...@host:5432/all_in_moderation \
-  node src/runtime/cli/migrate.ts
+# Once per database, with a privileged credential. Creates the four privilege roles, the four login
+# identities, their memberships, pgcrypto and the schema grants — idempotently, in one transaction.
+export PG_MIGRATOR_PASSWORD="$(openssl rand -hex 24)"
+export PG_RUNTIME_PASSWORD="$(openssl rand -hex 24)"
+export PG_WORKER_PASSWORD="$(openssl rand -hex 24)"
+export PG_RELAY_PASSWORD="$(openssl rand -hex 24)"
+PG_BOOTSTRAP_URL=postgres://<admin>:...@host:5432/all_in_moderation   node src/runtime/cli/bootstrap.ts
+
+# Then migrate, as the migrator *identity*, which assumes the app_migrator privilege role.
+PG_MIGRATOR_URL="postgres://app_migrator_login:${PG_MIGRATOR_PASSWORD}@host:5432/all_in_moderation"   node src/runtime/cli/migrate.ts
 
 # To see what is applied and what is pending, without changing anything:
 PG_MIGRATOR_URL=... node src/runtime/cli/migrate.ts --status
@@ -173,6 +248,9 @@ PG_MIGRATOR_URL=... node src/runtime/cli/migrate.ts --status
 `0008_meta_transport.sql` must have applied. It adds the transport columns, the
 `channel_connection_identities` table whose primary key is what prevents two clients claiming one
 page, and the `normalization` / `provider_context` columns.
+
+Neither `PG_BOOTSTRAP_URL` nor `PG_MIGRATOR_URL` belongs in the running service's environment. The
+runtime gets three credentials and none of them can change the schema.
 
 ---
 
@@ -246,6 +324,12 @@ If it fails, in order of likelihood:
 
 Verification only proves the URL. Nothing is delivered until you subscribe fields **and** subscribe
 the specific Page / IG account / WABA.
+
+> **This is the step that needs the SETUP CREDENTIAL from §3A.** Every `POST .../subscribed_apps`
+> below is an authenticated Graph API write; the dashboard's Page-subscription control makes the
+> same call with the same authority. Hold the token in the Graph API Explorer or in your own shell,
+> use it here, and let it expire. It must not reach `WEBHOOK_SECRETS`, `.env`, or any database
+> column — there is no column for it.
 
 ### Facebook Page
 
@@ -361,9 +445,88 @@ deletes or calls. Enabling any of that requires a new phase that:
 
 - adds an outbound HTTP client and a Meta API base URL (and therefore deletes assertions from
   `tests/architecture/no-outbound-meta.test.ts`),
-- obtains and stores page/IG/WhatsApp access tokens behind the `SecretResolver` port,
+- obtains and **stores** page/IG/WhatsApp access tokens behind the `SecretResolver` port — the
+  FUTURE OUTBOUND CREDENTIAL of §3C, which is a different thing from the short-lived setup token of
+  §3A both in lifetime and in where it is allowed to live,
 - promotes a single connection to `SEND_AND_RECEIVE` — which the database CHECK constraint refuses
   while it still holds only receive capabilities,
 - and passes whatever approval that phase defines.
 
 None of it happens by changing an environment variable.
+
+---
+
+## 13. The whole sequence, from an empty database to a shadowed Page
+
+Every command, in order. Steps 1–4 need a privileged database credential and nothing after them
+does. Steps 8–10 are the only ones that touch Meta, and step 9 is the only one that needs a
+send-capable token — in your hands, for one call.
+
+```bash
+# ================================================================================================
+# PART 1 — the database. No Meta account required. See docs/DEPLOYMENT-BOOTSTRAP.md.
+# ================================================================================================
+npm ci
+
+# 1. the database itself (privileged; CREATE DATABASE cannot run in a transaction)
+psql "$PG_ADMIN_URL" -c 'CREATE DATABASE all_in_moderation'
+
+# 2. what can this credential actually do? changes nothing; exits 1 while anything is missing
+export PG_BOOTSTRAP_URL="postgres://<admin>:...@$PG_HOST:5432/all_in_moderation"
+node src/runtime/cli/bootstrap.ts --check || true
+
+# 3. four privilege roles, four login identities, memberships, pgcrypto, schema grants
+export PG_MIGRATOR_PASSWORD="$(openssl rand -hex 24)"
+export PG_RUNTIME_PASSWORD="$(openssl rand -hex 24)"
+export PG_WORKER_PASSWORD="$(openssl rand -hex 24)"
+export PG_RELAY_PASSWORD="$(openssl rand -hex 24)"
+node src/runtime/cli/bootstrap.ts
+#    -> put all four passwords in your secret manager now; nothing prints them again
+unset PG_BOOTSTRAP_URL
+
+# 4. the schema, as the migrator identity assuming the app_migrator privilege role
+export PG_MIGRATOR_URL="postgres://app_migrator_login:${PG_MIGRATOR_PASSWORD}@$PG_HOST:5432/all_in_moderation"
+node src/runtime/cli/migrate.ts
+unset PG_MIGRATOR_URL PG_MIGRATOR_PASSWORD
+
+# ================================================================================================
+# PART 2 — the service. Still no Meta account required.
+# ================================================================================================
+# 5. the runtime's three credentials, and the safety posture
+export PG_RUNTIME_URL="postgres://app_runtime_login:${PG_RUNTIME_PASSWORD}@$PG_HOST:5432/all_in_moderation"
+export PG_WORKER_URL="postgres://app_worker_login:${PG_WORKER_PASSWORD}@$PG_HOST:5432/all_in_moderation"
+export PG_RELAY_URL="postgres://app_relay_login:${PG_RELAY_PASSWORD}@$PG_HOST:5432/all_in_moderation"
+export OUTBOUND_MODE=SIMULATE
+export APP_ROLE=all
+export HTTP_PORT=8080
+
+# 6. the RUNTIME WEBHOOK SECRETS of §3B — app secret and a verify token you invent
+export WEBHOOK_SECRETS='{"secret://<client>/meta":{"appSecret":"<from the app dashboard>","verifyToken":"<openssl rand -hex 24>"}}'
+
+# 7. prove the whole inbound chain offline, with no Meta account and no network
+node src/runtime/cli/shadow-acceptance.ts --self-test        # "ok": true, exits 0
+
+npm start
+curl -s localhost:8080/health/status | jq '{status, process, database}'
+#    process.outboundMode must read SIMULATE; database.reachable must be true
+
+# ================================================================================================
+# PART 3 — the Meta surface. Steps 0-4 and 7 of this checklist must already be done.
+# ================================================================================================
+# 8. provision the connection FIRST: it generates the path Meta must be pointed at (§6)
+node src/runtime/cli/meta-connection.ts provision \
+  --account acc_<...> --channel FACEBOOK \
+  --external-id <page id> --credentials-ref secret://<client>/meta
+#    -> prints webhookPath; callback URL is https://<public host><webhookPath>   (§7)
+
+# 9. subscribe the fields and the surface. THIS is the SETUP CREDENTIAL step (§3A, §8).
+#    Use the Graph API Explorer or the App Dashboard; the token stays with you and expires.
+#      POST /v<version>/<page id>/subscribed_apps?subscribed_fields=messages,...
+
+# 10. prove it against the real connection (§9)
+node src/runtime/cli/meta-connection.ts status --account acc_<...> --connection chc_<...>
+node src/runtime/cli/shadow-acceptance.ts --account acc_<...> --connection chc_<...> --limit 5
+#    a pass prints "ok": true and asserts every outbound action is SIMULATED
+```
+
+Stop at the end of Part 2 if you do not yet have all four confirmations from §0.

@@ -28,10 +28,11 @@ permissions:
 env:
   # The floor the tree may never fall below. Phase 01 closed at 251 (147 in-memory + 104
   # PostgreSQL); Phase 02A took it to 332 with the runtime shell, the HTTP edge, the outbox relay
-  # and health; Phase 02B adds the Meta payload corpus, the receive-only adversarial suite, the
-  # no-outbound architecture gate and the Postgres transport suite.
+  # and health; Phase 02B took it to 452 with the Meta payload corpus, the receive-only adversarial
+  # suite, the no-outbound architecture gate and the Postgres transport suite; Phase 02B.1 adds the
+  # deployment-bootstrap suite, which proves the role model on a second, entirely fresh cluster.
   # Adding suites means raising this deliberately; it can never shrink by accident.
-  MIN_TESTS: '452'
+  MIN_TESTS: '473'
 
 jobs:
   verify:
@@ -153,6 +154,7 @@ jobs:
           # so requiring the line to end in `ms)` is what separates a proof from an excuse.
           suites=(
             'postgres migrations'
+            'postgres deployment bootstrap'
             'postgres row-level security'
             'postgres transactions'
             'postgres concurrency'
@@ -251,6 +253,40 @@ jobs:
           npm run demo 2>&1 | tee "$RUNNER_TEMP/demo.log"
           if ! grep -qF 'All outbound actions are SIMULATED.' "$RUNNER_TEMP/demo.log"; then
             echo "::error::the demo did not report a fully simulated run"
+            exit 1
+          fi
+
+      - name: A fresh database cannot be migrated by a credential that is not the migrator
+        shell: bash
+        timeout-minutes: 2
+        # The deployment defect Phase 02B.1 closed, asserted at the command level rather than only
+        # inside the suite. `app_migrator` is NOLOGIN — the connection string the previous
+        # checklist told operators to use could never have worked — and the migrate CLI now names
+        # the identity, assumes the privilege role, and says so when it cannot.
+        run: |
+          set -euo pipefail
+          set +e
+          out="$(PG_MIGRATOR_URL='' node src/runtime/cli/migrate.ts 2>&1)"
+          code=$?
+          set -e
+          echo "$out"
+          if [ "$code" -eq 0 ]; then
+            echo "::error::migrate ran with no PG_MIGRATOR_URL"
+            exit 1
+          fi
+          if ! printf '%s' "$out" | grep -qF 'app_migrator_login'; then
+            echo "::error::the failure must name the login identity, not the NOLOGIN privilege role"
+            exit 1
+          fi
+
+          # And a password on the command line is refused rather than silently ignored.
+          set +e
+          out="$(PG_BOOTSTRAP_URL=postgres://x@localhost/y node src/runtime/cli/bootstrap.ts --password hunter2 2>&1)"
+          code=$?
+          set -e
+          echo "$out"
+          if [ "$code" -eq 0 ] || ! printf '%s' "$out" | grep -qF 'ARGS_INVALID'; then
+            echo "::error::--password must be refused: argv is world-readable"
             exit 1
           fi
 

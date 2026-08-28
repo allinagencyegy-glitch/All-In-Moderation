@@ -42,12 +42,29 @@ start a disposable embedded cluster themselves, so no local database is needed.
 
 ## Running the application
 
+An empty PostgreSQL cluster is not a deployable one: the migrations create four **privilege roles**
+and every one of them is `NOLOGIN`. The login identities that connect are created once, by a
+privileged bootstrap:
+
+```bash
+psql "$PG_ADMIN_URL" -c 'CREATE DATABASE all_in_moderation'
+
+PG_BOOTSTRAP_URL=postgres://<admin>:...@localhost:5432/all_in_moderation PG_MIGRATOR_PASSWORD=... PG_RUNTIME_PASSWORD=... PG_WORKER_PASSWORD=... PG_RELAY_PASSWORD=...   node src/runtime/cli/bootstrap.ts
+
+PG_MIGRATOR_URL=postgres://app_migrator_login:...@localhost:5432/all_in_moderation   node src/runtime/cli/migrate.ts
+```
+
+Then the service, with three credentials and no schema authority at all:
+
 ```bash
 export PG_RUNTIME_URL=postgres://app_runtime_login:...@localhost:5432/all_in_moderation
 export PG_WORKER_URL=postgres://app_worker_login:...@localhost:5432/all_in_moderation
 export PG_RELAY_URL=postgres://app_relay_login:...@localhost:5432/all_in_moderation
 npm start
 ```
+
+The full procedure, including what privilege the bootstrap needs and for how long, is
+[docs/DEPLOYMENT-BOOTSTRAP.md](docs/DEPLOYMENT-BOOTSTRAP.md).
 
 Three URLs, three roles, no fallback — collapsing them would quietly merge three privilege
 boundaries into one, so the process refuses to start rather than guess. `APP_ROLE` selects what
@@ -146,23 +163,29 @@ runtime — client business content belongs in an Account Pack (ADR-010).
 - **Privilege is a database role, not a code comment.** `app_runtime` is RLS-bound to one tenant,
   `app_worker` sees the queue and two tables, `app_relay` sees the outbox and may write exactly
   one column. Each limit is asserted by a test that connects as that role and gets `42501`.
+- **Credentials and privileges are different objects.** Privilege roles hold grants and are
+  `NOLOGIN`; login identities hold passwords and are members of exactly one privilege role. The
+  test harness bootstraps a real cluster through the same code path an operator runs, so a
+  privilege the deployment procedure forgets to grant is a red build.
 - **Shutdown releases work instead of failing it.** An interrupted job goes back to `READY` with
   its lease cleared, not to the dead-letter queue.
 
 ## Documentation
 
-| Document                                                                                     | What it answers                                        |
-| -------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| [docs/ARCHITECTURE-REVIEW.md](docs/ARCHITECTURE-REVIEW.md)                                   | Why the system is shaped this way                      |
-| [docs/DOMAIN-MODEL.md](docs/DOMAIN-MODEL.md)                                                 | Entities, relationships, invariants                    |
-| [docs/STATE-MACHINES.md](docs/STATE-MACHINES.md)                                             | Every lifecycle and its legal transitions              |
-| [docs/FAILURE-MODE-REGISTER.md](docs/FAILURE-MODE-REGISTER.md)                               | The F-numbers referenced throughout the code           |
-| [docs/adr/](docs/adr/)                                                                       | The ten decisions, their options, and revisit triggers |
-| [docs/HANDOFF-PHASE-00.md](docs/HANDOFF-PHASE-00.md)                                         | The foundation, proven against an in-memory store      |
-| [docs/HANDOFF-PHASE-01.md](docs/HANDOFF-PHASE-01.md)                                         | The PostgreSQL proof, and the six defects it found     |
-| [docs/HANDOFF-PHASE-02A.md](docs/HANDOFF-PHASE-02A.md)                                       | The runtime shell: what runs, what is still simulated  |
-| [docs/HANDOFF-PHASE-02B.md](docs/HANDOFF-PHASE-02B.md)                                       | Meta receive-only transport: what is proved, and how   |
-| [docs/META-RECEIVE-ONLY-OPERATOR-CHECKLIST.md](docs/META-RECEIVE-ONLY-OPERATOR-CHECKLIST.md) | Attaching a real Meta connection, step by step         |
+| Document                                                                                     | What it answers                                               |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| [docs/ARCHITECTURE-REVIEW.md](docs/ARCHITECTURE-REVIEW.md)                                   | Why the system is shaped this way                             |
+| [docs/DOMAIN-MODEL.md](docs/DOMAIN-MODEL.md)                                                 | Entities, relationships, invariants                           |
+| [docs/STATE-MACHINES.md](docs/STATE-MACHINES.md)                                             | Every lifecycle and its legal transitions                     |
+| [docs/FAILURE-MODE-REGISTER.md](docs/FAILURE-MODE-REGISTER.md)                               | The F-numbers referenced throughout the code                  |
+| [docs/adr/](docs/adr/)                                                                       | The ten decisions, their options, and revisit triggers        |
+| [docs/HANDOFF-PHASE-00.md](docs/HANDOFF-PHASE-00.md)                                         | The foundation, proven against an in-memory store             |
+| [docs/HANDOFF-PHASE-01.md](docs/HANDOFF-PHASE-01.md)                                         | The PostgreSQL proof, and the six defects it found            |
+| [docs/HANDOFF-PHASE-02A.md](docs/HANDOFF-PHASE-02A.md)                                       | The runtime shell: what runs, what is still simulated         |
+| [docs/HANDOFF-PHASE-02B.md](docs/HANDOFF-PHASE-02B.md)                                       | Meta receive-only transport: what is proved, and how          |
+| [docs/HANDOFF-PHASE-02B1.md](docs/HANDOFF-PHASE-02B1.md)                                     | The deployment bootstrap, and the defect it closed            |
+| [docs/DEPLOYMENT-BOOTSTRAP.md](docs/DEPLOYMENT-BOOTSTRAP.md)                                 | Empty cluster to running service, and what privilege it needs |
+| [docs/META-RECEIVE-ONLY-OPERATOR-CHECKLIST.md](docs/META-RECEIVE-ONLY-OPERATOR-CHECKLIST.md) | Attaching a real Meta connection, step by step                |
 
 ## Configuration
 
@@ -183,6 +206,12 @@ about — producing a **simulated** decision and nothing else.
 `src/`, no Meta API host, no access token, and no dispatch handler.
 `tests/architecture/no-outbound-meta.test.ts` fails the build if any of that changes, and CI
 repeats the check as a named step.
+
+**Phase 02B.1 made the deployment itself real.** The privilege model the migrations describe now
+has a procedure that produces it: a privileged, idempotent bootstrap creates the four login
+identities the four `NOLOGIN` privilege roles were always missing, migrations run as
+`app_migrator_login` assuming `app_migrator`, and the test harness proves the whole chain on a
+cluster that has never been touched.
 
 **No live Meta credential has been used and no real connection has been attached.** Everything is
 proved offline against a committed corpus of official payload shapes, and on a real PostgreSQL
