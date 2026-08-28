@@ -264,7 +264,7 @@ nothing after it can be done without it.
 | Was any customer-facing message sent?              | **No.** Every outbound action in every test and in the demo is `SIMULATED`.                                                                                                     |
 | Was a real LLM connected?                          | **No.** `mock` only.                                                                                                                                                            |
 | Were any Dental Hub-specific business rules added? | **No.** The forbidden-identifier check still passes; all fixtures are synthetic.                                                                                                |
-| Was any CI gate weakened?                          | **No.** `MIN_TESTS` rose 332 → 445, one Postgres suite was added to the required list, and two new gates were added. Nothing was removed or relaxed.                            |
+| Was any CI gate weakened?                          | **No.** `MIN_TESTS` rose 332 → 452, one Postgres suite was added to the required list, and two new gates were added. Nothing was removed or relaxed.                            |
 | Was anything merged?                               | **No.**                                                                                                                                                                         |
 
 ---
