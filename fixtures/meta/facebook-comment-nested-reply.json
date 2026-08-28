@@ -1,0 +1,41 @@
+{
+  "name": "facebook-comment-nested-reply",
+  "channel": "FACEBOOK",
+  "description": "A reply to another comment. Here parent_id differs from post_id and is a genuine parent reference.",
+  "source": "Page webhooks reference, feed field, threaded comment",
+  "expect": {
+    "items": 1,
+    "actionable": 1,
+    "issues": 0,
+    "classifications": {
+      "COMMENT": 1
+    }
+  },
+  "payload": {
+    "object": "page",
+    "entry": [
+      {
+        "id": "109876543210987",
+        "time": 1748736700,
+        "changes": [
+          {
+            "field": "feed",
+            "value": {
+              "item": "comment",
+              "verb": "add",
+              "created_time": 1748736700,
+              "comment_id": "109876543210987_9002",
+              "post_id": "109876543210987_8001",
+              "parent_id": "109876543210987_9001",
+              "from": {
+                "id": "7712345678901235",
+                "name": "Another Customer"
+              },
+              "message": "Same question here"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

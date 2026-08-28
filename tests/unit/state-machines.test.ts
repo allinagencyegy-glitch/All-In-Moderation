@@ -304,6 +304,7 @@ describe('raw event lifecycle', () => {
     normalizedAt: null,
     producedMessageIds: [],
     error: null,
+    normalization: null,
     traceId: asId<TraceId>('trc_1'),
   };
 

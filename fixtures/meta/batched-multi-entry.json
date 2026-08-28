@@ -1,0 +1,74 @@
+{
+  "name": "batched-multi-entry",
+  "channel": "FACEBOOK",
+  "description": "Meta batches. One POST carrying several entries and several items, all of which must be processed rather than only the first.",
+  "source": "Messenger Platform webhook reference, batched entries",
+  "expect": {
+    "items": 3,
+    "actionable": 3,
+    "issues": 0,
+    "classifications": {
+      "MESSAGE_TEXT": 2,
+      "COMMENT": 1
+    }
+  },
+  "payload": {
+    "object": "page",
+    "entry": [
+      {
+        "id": "109876543210987",
+        "time": 1748738800000,
+        "messaging": [
+          {
+            "sender": {
+              "id": "24680135791357913"
+            },
+            "recipient": {
+              "id": "109876543210987"
+            },
+            "timestamp": 1748738800000,
+            "message": {
+              "mid": "m_AAAAAAAAAD1",
+              "text": "First"
+            }
+          },
+          {
+            "sender": {
+              "id": "24680135791357913"
+            },
+            "recipient": {
+              "id": "109876543210987"
+            },
+            "timestamp": 1748738801000,
+            "message": {
+              "mid": "m_AAAAAAAAAD2",
+              "text": "Second"
+            }
+          }
+        ]
+      },
+      {
+        "id": "109876543210987",
+        "time": 1748738802000,
+        "changes": [
+          {
+            "field": "feed",
+            "value": {
+              "item": "comment",
+              "verb": "add",
+              "created_time": 1748738802,
+              "comment_id": "109876543210987_9010",
+              "post_id": "109876543210987_8001",
+              "parent_id": "109876543210987_8001",
+              "from": {
+                "id": "7712345678901238",
+                "name": "A Third Customer"
+              },
+              "message": "Third"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

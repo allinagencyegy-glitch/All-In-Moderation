@@ -99,10 +99,16 @@ describe('meta envelope parsing', () => {
     assert.equal(result.items[0]!.dedupeKey, 'c_1');
   });
 
-  it('counts echoes and receipts as ignored rather than dropping them silently', () => {
+  it('classifies echoes and receipts explicitly rather than dropping them silently', () => {
+    // Phase 02A returned an `ignored` count, which collapsed "this is our own message coming
+    // back", "this is a read receipt" and "we have never seen this shape" into one number. Those
+    // need three different responses, so each item is now returned carrying its own verdict and
+    // the decision to act is taken downstream (objective 7).
     const echo = parseMetaEnvelope(metaEchoEnvelope('page-1', 'psid-1', 'm_1'), NOW);
-    assert.equal(echo.items.length, 0);
-    assert.equal(echo.ignored, 1);
+    assert.equal(echo.items.length, 1);
+    assert.equal(echo.items[0]!.classification, 'ECHO_SELF_MESSAGE');
+    assert.equal(echo.items[0]!.kind, 'ECHO');
+    assert.equal(echo.issues.length, 0);
 
     const receipt = parseMetaEnvelope(
       {
@@ -123,7 +129,9 @@ describe('meta envelope parsing', () => {
       },
       NOW,
     );
-    assert.equal(receipt.ignored, 1);
+    assert.equal(receipt.items.length, 1);
+    assert.equal(receipt.items[0]!.classification, 'RECEIPT_DELIVERY');
+    assert.equal(receipt.items[0]!.kind, 'RECEIPT');
   });
 
   it('derives a stable key when the provider supplies no id, and records that it is derived', () => {
@@ -206,7 +214,48 @@ describe('meta envelope parsing', () => {
       NOW,
     );
     assert.deepEqual(ig.items, []);
+
     const wa = parseMetaEnvelope(
+      {
+        object: 'whatsapp_business_account',
+        entry: [
+          {
+            id: 'wa-1',
+            changes: [
+              {
+                field: 'messages',
+                value: {
+                  messaging_product: 'whatsapp',
+                  metadata: { display_phone_number: '15550001111', phone_number_id: 'pn-1' },
+                  messages: [
+                    {
+                      from: '15559998888',
+                      id: 'wamid.X',
+                      timestamp: '1000',
+                      type: 'text',
+                      text: { body: 'x' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+      NOW,
+    );
+    assert.equal(wa.items[0]!.channel, 'WHATSAPP');
+    // The routable identity is the phone number id from `metadata`, not `entry.id` — which names
+    // the business account, and which many numbers can share.
+    assert.deepEqual(wa.items[0]!.routing, { kind: 'WHATSAPP_PHONE_NUMBER', externalId: 'pn-1' });
+    assert.equal(wa.items[0]!.entryExternalId, 'wa-1');
+  });
+
+  it('refuses to read a whatsapp envelope with another channel’s transport', () => {
+    // WhatsApp has no `messaging` array. Something claiming to be one is a shape we do not
+    // understand, not a message to be interpreted with Messenger's rules — and interpreting it
+    // that way would route it on `entry.id`, which for WhatsApp is the wrong identifier entirely.
+    const result = parseMetaEnvelope(
       {
         object: 'whatsapp_business_account',
         entry: [
@@ -225,7 +274,9 @@ describe('meta envelope parsing', () => {
       },
       NOW,
     );
-    assert.equal(wa.items[0]!.channel, 'WHATSAPP');
+    assert.deepEqual(result.items, []);
+    assert.equal(result.issues.length, 1);
+    assert.match(result.issues[0]!, /messaging\[0\] on a whatsapp envelope/);
   });
 
   it('is total: no input shape throws', () => {

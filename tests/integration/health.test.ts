@@ -149,6 +149,7 @@ describe('health snapshot', () => {
       normalizedAt: null,
       producedMessageIds: [],
       error: null,
+      normalization: null,
       traceId: TRACE,
     });
     rig.db.tables.rawEvents.set('rie_2', {
@@ -164,6 +165,7 @@ describe('health snapshot', () => {
       normalizedAt: rig.clock.now(),
       producedMessageIds: [],
       error: null,
+      normalization: null,
       traceId: TRACE,
     });
 

@@ -1,0 +1,39 @@
+{
+  "name": "facebook-feed-non-comment",
+  "channel": "FACEBOOK",
+  "description": "Feed activity that is not a comment: a reaction on our own post. The Phase 02A parser would have mislabelled this.",
+  "source": "Page webhooks reference, feed field, reaction item",
+  "expect": {
+    "items": 1,
+    "actionable": 0,
+    "issues": 0,
+    "classifications": {
+      "UNKNOWN_FIELD": 1
+    }
+  },
+  "payload": {
+    "object": "page",
+    "entry": [
+      {
+        "id": "109876543210987",
+        "time": 1748737000,
+        "changes": [
+          {
+            "field": "feed",
+            "value": {
+              "item": "reaction",
+              "verb": "add",
+              "reaction_type": "like",
+              "post_id": "109876543210987_8001",
+              "created_time": 1748737000,
+              "from": {
+                "id": "7712345678901236",
+                "name": "A Reactor"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

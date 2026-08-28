@@ -1,0 +1,51 @@
+{
+  "name": "facebook-messenger-receipts",
+  "channel": "FACEBOOK",
+  "description": "Delivery and read acknowledgements for messages we sent. Never customer turns.",
+  "source": "Messenger Platform webhook reference, message_deliveries and message_reads",
+  "expect": {
+    "items": 2,
+    "actionable": 0,
+    "issues": 0,
+    "classifications": {
+      "RECEIPT_DELIVERY": 1,
+      "RECEIPT_READ": 1
+    }
+  },
+  "payload": {
+    "object": "page",
+    "entry": [
+      {
+        "id": "109876543210987",
+        "time": 1748736400000,
+        "messaging": [
+          {
+            "sender": {
+              "id": "24680135791357913"
+            },
+            "recipient": {
+              "id": "109876543210987"
+            },
+            "timestamp": 1748736400000,
+            "delivery": {
+              "mids": ["m_AAAAAAAAAA4"],
+              "watermark": 1748736400000
+            }
+          },
+          {
+            "sender": {
+              "id": "24680135791357913"
+            },
+            "recipient": {
+              "id": "109876543210987"
+            },
+            "timestamp": 1748736401000,
+            "read": {
+              "watermark": 1748736401000
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

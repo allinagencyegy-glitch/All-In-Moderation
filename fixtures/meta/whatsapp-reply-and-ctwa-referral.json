@@ -1,0 +1,64 @@
+{
+  "name": "whatsapp-reply-and-ctwa-referral",
+  "channel": "WHATSAPP",
+  "description": "A reply carrying click-to-WhatsApp ad provenance. WhatsApp names the referral fields differently from Messenger; both normalise to one shape.",
+  "source": "WhatsApp Cloud API webhooks reference, context and referral",
+  "expect": {
+    "items": 1,
+    "actionable": 1,
+    "issues": 0,
+    "classifications": {
+      "MESSAGE_TEXT": 1
+    }
+  },
+  "payload": {
+    "object": "whatsapp_business_account",
+    "entry": [
+      {
+        "id": "102290129340398",
+        "changes": [
+          {
+            "field": "messages",
+            "value": {
+              "messaging_product": "whatsapp",
+              "metadata": {
+                "display_phone_number": "15550001111",
+                "phone_number_id": "106540352242922"
+              },
+              "contacts": [
+                {
+                  "profile": {
+                    "name": "A Customer"
+                  },
+                  "wa_id": "15551234567"
+                }
+              ],
+              "messages": [
+                {
+                  "from": "15551234567",
+                  "id": "wamid.HBgLMTU1NTEyMzQ1NjcVAgASGBQ1",
+                  "timestamp": "1748737900",
+                  "type": "text",
+                  "text": {
+                    "body": "Yes please"
+                  },
+                  "context": {
+                    "from": "15550001111",
+                    "id": "wamid.HBgLMTU1NTEyMzQ1NjcVAgASGBQz"
+                  },
+                  "referral": {
+                    "source_url": "https://fb.me/example",
+                    "source_type": "ad",
+                    "source_id": "6045246247433",
+                    "headline": "Book today",
+                    "ctwa_clid": "AfxYzExampleClickId"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

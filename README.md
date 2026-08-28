@@ -151,16 +151,18 @@ runtime — client business content belongs in an Account Pack (ADR-010).
 
 ## Documentation
 
-| Document                                                       | What it answers                                        |
-| -------------------------------------------------------------- | ------------------------------------------------------ |
-| [docs/ARCHITECTURE-REVIEW.md](docs/ARCHITECTURE-REVIEW.md)     | Why the system is shaped this way                      |
-| [docs/DOMAIN-MODEL.md](docs/DOMAIN-MODEL.md)                   | Entities, relationships, invariants                    |
-| [docs/STATE-MACHINES.md](docs/STATE-MACHINES.md)               | Every lifecycle and its legal transitions              |
-| [docs/FAILURE-MODE-REGISTER.md](docs/FAILURE-MODE-REGISTER.md) | The F-numbers referenced throughout the code           |
-| [docs/adr/](docs/adr/)                                         | The ten decisions, their options, and revisit triggers |
-| [docs/HANDOFF-PHASE-00.md](docs/HANDOFF-PHASE-00.md)           | The foundation, proven against an in-memory store      |
-| [docs/HANDOFF-PHASE-01.md](docs/HANDOFF-PHASE-01.md)           | The PostgreSQL proof, and the six defects it found     |
-| [docs/HANDOFF-PHASE-02A.md](docs/HANDOFF-PHASE-02A.md)         | The runtime shell: what runs, what is still simulated  |
+| Document                                                                                     | What it answers                                        |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| [docs/ARCHITECTURE-REVIEW.md](docs/ARCHITECTURE-REVIEW.md)                                   | Why the system is shaped this way                      |
+| [docs/DOMAIN-MODEL.md](docs/DOMAIN-MODEL.md)                                                 | Entities, relationships, invariants                    |
+| [docs/STATE-MACHINES.md](docs/STATE-MACHINES.md)                                             | Every lifecycle and its legal transitions              |
+| [docs/FAILURE-MODE-REGISTER.md](docs/FAILURE-MODE-REGISTER.md)                               | The F-numbers referenced throughout the code           |
+| [docs/adr/](docs/adr/)                                                                       | The ten decisions, their options, and revisit triggers |
+| [docs/HANDOFF-PHASE-00.md](docs/HANDOFF-PHASE-00.md)                                         | The foundation, proven against an in-memory store      |
+| [docs/HANDOFF-PHASE-01.md](docs/HANDOFF-PHASE-01.md)                                         | The PostgreSQL proof, and the six defects it found     |
+| [docs/HANDOFF-PHASE-02A.md](docs/HANDOFF-PHASE-02A.md)                                       | The runtime shell: what runs, what is still simulated  |
+| [docs/HANDOFF-PHASE-02B.md](docs/HANDOFF-PHASE-02B.md)                                       | Meta receive-only transport: what is proved, and how   |
+| [docs/META-RECEIVE-ONLY-OPERATOR-CHECKLIST.md](docs/META-RECEIVE-ONLY-OPERATOR-CHECKLIST.md) | Attaching a real Meta connection, step by step         |
 
 ## Configuration
 
@@ -171,11 +173,20 @@ message. Secrets are never read from config — they are resolved by reference t
 
 ## Status
 
-**Phase 02A: the application shell is built and proven.** The process polls PostgreSQL, reaps
-expired leases on a timer, relays the outbox, serves signed webhooks over HTTP, reports its own
-health, and shuts down cleanly. Every suite runs against a real PostgreSQL server in CI on a
-GitHub-hosted runner.
+**Phase 02B: real Meta inbound transport, receive-only.** The platform can receive Facebook
+Messenger messages, Facebook Page comments, Instagram DMs, Instagram comments and WhatsApp Cloud
+API messages over Meta's official webhook contracts. Deliveries are signature-verified over exact
+raw bytes, persisted before anything interprets them, normalised into conversations, and reasoned
+about — producing a **simulated** decision and nothing else.
 
-**Live Meta connection is not authorised.** There is no provider transport, no outbound delivery
-and no real model. See [docs/HANDOFF-PHASE-02A.md](docs/HANDOFF-PHASE-02A.md) for the full account
-of what is proven, what remains simulated, and what has to be true before that changes.
+**Nothing can be sent.** Not disabled, not feature-flagged: there is no outbound HTTP client in
+`src/`, no Meta API host, no access token, and no dispatch handler.
+`tests/architecture/no-outbound-meta.test.ts` fails the build if any of that changes, and CI
+repeats the check as a named step.
+
+**No live Meta credential has been used and no real connection has been attached.** Everything is
+proved offline against a committed corpus of official payload shapes, and on a real PostgreSQL
+server in CI. Attaching a real account is operator work:
+[docs/META-RECEIVE-ONLY-OPERATOR-CHECKLIST.md](docs/META-RECEIVE-ONLY-OPERATOR-CHECKLIST.md) is the
+step-by-step procedure, and [docs/HANDOFF-PHASE-02B.md](docs/HANDOFF-PHASE-02B.md) is the full
+account of what is proved, what is not, and what has to be true before sending is possible.

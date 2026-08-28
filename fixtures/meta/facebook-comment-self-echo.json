@@ -1,0 +1,41 @@
+{
+  "name": "facebook-comment-self-echo",
+  "channel": "FACEBOOK",
+  "description": "The Page replying to a comment on its own post, delivered back through the same webhook. The public-surface echo loop.",
+  "source": "Page webhooks reference, feed field, comment authored by the page",
+  "expect": {
+    "items": 1,
+    "actionable": 0,
+    "issues": 0,
+    "classifications": {
+      "ECHO_SELF_COMMENT": 1
+    }
+  },
+  "payload": {
+    "object": "page",
+    "entry": [
+      {
+        "id": "109876543210987",
+        "time": 1748736800,
+        "changes": [
+          {
+            "field": "feed",
+            "value": {
+              "item": "comment",
+              "verb": "add",
+              "created_time": 1748736800,
+              "comment_id": "109876543210987_9003",
+              "post_id": "109876543210987_8001",
+              "parent_id": "109876543210987_9001",
+              "from": {
+                "id": "109876543210987",
+                "name": "The Page"
+              },
+              "message": "Happy to help, sending you a message now."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

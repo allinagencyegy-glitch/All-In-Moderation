@@ -1,0 +1,41 @@
+{
+  "name": "instagram-comment-reply-self-echo",
+  "channel": "INSTAGRAM",
+  "description": "Our own reply to an Instagram comment, redelivered. Instagram sends no is_echo for comments, so only the identity check catches this.",
+  "source": "Instagram Platform webhooks reference, comments field with parent_id",
+  "expect": {
+    "items": 1,
+    "actionable": 0,
+    "issues": 0,
+    "classifications": {
+      "ECHO_SELF_COMMENT": 1
+    }
+  },
+  "payload": {
+    "object": "instagram",
+    "entry": [
+      {
+        "id": "17841400000000001",
+        "time": 1748737500,
+        "changes": [
+          {
+            "field": "comments",
+            "value": {
+              "id": "17865799348089978",
+              "parent_id": "17865799348089977",
+              "text": "We have sent you our price list in a message.",
+              "from": {
+                "id": "17841400000000001",
+                "username": "the_business"
+              },
+              "media": {
+                "id": "17895695668004551",
+                "media_product_type": "FEED"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

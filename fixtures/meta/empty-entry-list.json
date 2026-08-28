@@ -1,0 +1,16 @@
+{
+  "name": "empty-entry-list",
+  "channel": "FACEBOOK",
+  "description": "A well-formed envelope carrying nothing. Not an error, but not silence either.",
+  "source": "Synthetic: an envelope with an empty entry array",
+  "expect": {
+    "items": 0,
+    "actionable": 0,
+    "issues": 1,
+    "classifications": {}
+  },
+  "payload": {
+    "object": "page",
+    "entry": []
+  }
+}

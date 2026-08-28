@@ -1,0 +1,47 @@
+{
+  "name": "facebook-messenger-sticker",
+  "channel": "FACEBOOK",
+  "description": "A sticker, which Meta types as an image and distinguishes only by sticker_id.",
+  "source": "Messenger Platform webhook reference, sticker payload",
+  "expect": {
+    "items": 1,
+    "actionable": 1,
+    "issues": 0,
+    "classifications": {
+      "MESSAGE_STICKER": 1
+    }
+  },
+  "payload": {
+    "object": "page",
+    "entry": [
+      {
+        "id": "109876543210987",
+        "time": 1748736150000,
+        "messaging": [
+          {
+            "sender": {
+              "id": "24680135791357913"
+            },
+            "recipient": {
+              "id": "109876543210987"
+            },
+            "timestamp": 1748736150000,
+            "message": {
+              "mid": "m_AAAAAAAAAA9",
+              "attachments": [
+                {
+                  "type": "image",
+                  "payload": {
+                    "url": "https://scontent.xx.fbcdn.net/sticker.png",
+                    "sticker_id": 369239263222822
+                  }
+                }
+              ],
+              "sticker_id": 369239263222822
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "name": "whatsapp-value-errors",
+  "channel": "WHATSAPP",
+  "description": "A delivery Meta itself could not construct. Recorded so an operator sees the provider reporting failure rather than a gap in the ledger.",
+  "source": "WhatsApp Cloud API webhooks reference, value-level errors",
+  "expect": {
+    "items": 1,
+    "actionable": 0,
+    "issues": 0,
+    "classifications": {
+      "PROVIDER_ERROR": 1
+    }
+  },
+  "payload": {
+    "object": "whatsapp_business_account",
+    "entry": [
+      {
+        "id": "102290129340398",
+        "changes": [
+          {
+            "field": "messages",
+            "value": {
+              "messaging_product": "whatsapp",
+              "metadata": {
+                "display_phone_number": "15550001111",
+                "phone_number_id": "106540352242922"
+              },
+              "errors": [
+                {
+                  "code": 130472,
+                  "title": "User is in an experiment group",
+                  "error_data": {
+                    "details": "Message was not sent"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "name": "whatsapp-interactive-reply",
+  "channel": "WHATSAPP",
+  "description": "A tapped list reply. Unlike a Messenger postback this carries real customer words, so it is a real turn.",
+  "source": "WhatsApp Cloud API webhooks reference, interactive message",
+  "expect": {
+    "items": 1,
+    "actionable": 1,
+    "issues": 0,
+    "classifications": {
+      "MESSAGE_INTERACTIVE": 1
+    }
+  },
+  "payload": {
+    "object": "whatsapp_business_account",
+    "entry": [
+      {
+        "id": "102290129340398",
+        "changes": [
+          {
+            "field": "messages",
+            "value": {
+              "messaging_product": "whatsapp",
+              "metadata": {
+                "display_phone_number": "15550001111",
+                "phone_number_id": "106540352242922"
+              },
+              "contacts": [
+                {
+                  "profile": {
+                    "name": "A Customer"
+                  },
+                  "wa_id": "15551234567"
+                }
+              ],
+              "messages": [
+                {
+                  "from": "15551234567",
+                  "id": "wamid.HBgLMTU1NTEyMzQ1NjcVAgASGBQ2",
+                  "timestamp": "1748738000",
+                  "type": "interactive",
+                  "interactive": {
+                    "type": "list_reply",
+                    "list_reply": {
+                      "id": "SLOT_THU_1500",
+                      "title": "Thursday 3:00pm",
+                      "description": "Next available"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

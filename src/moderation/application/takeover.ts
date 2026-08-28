@@ -232,6 +232,10 @@ export function createTakeoverService(deps: TakeoverDeps): TakeoverService {
           receivedAt: deps.clock.now(),
           rawInboundEventId: null,
           outboundActionId: null,
+          // An operator's own message came from a person, not from a provider envelope. There is
+          // no provenance to record, and inventing one would make it indistinguishable from an
+          // inbound message that really did arrive over a transport.
+          providerContext: {},
           redactedAt: null,
         };
         await deps.messages.insertIfNew(scope, message);

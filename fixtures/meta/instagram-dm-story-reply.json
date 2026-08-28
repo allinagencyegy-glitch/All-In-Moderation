@@ -1,0 +1,44 @@
+{
+  "name": "instagram-dm-story-reply",
+  "channel": "INSTAGRAM",
+  "description": "A reply to one of our stories. A different conversational act from a reply to a message, and Meta overloads reply_to for both.",
+  "source": "Instagram Platform webhooks reference, reply_to.story",
+  "expect": {
+    "items": 1,
+    "actionable": 1,
+    "issues": 0,
+    "classifications": {
+      "MESSAGE_TEXT": 1
+    }
+  },
+  "payload": {
+    "object": "instagram",
+    "entry": [
+      {
+        "id": "17841400000000001",
+        "time": 1748737200000,
+        "messaging": [
+          {
+            "sender": {
+              "id": "6789012345678901"
+            },
+            "recipient": {
+              "id": "17841400000000001"
+            },
+            "timestamp": 1748737200000,
+            "message": {
+              "mid": "aWdfZG1fMg",
+              "text": "Love this!",
+              "reply_to": {
+                "story": {
+                  "id": "17895695668004550",
+                  "url": "https://lookaside.fbsbx.com/story.jpg"
+                }
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

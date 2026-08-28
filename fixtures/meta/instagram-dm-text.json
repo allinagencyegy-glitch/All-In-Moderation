@@ -1,0 +1,38 @@
+{
+  "name": "instagram-dm-text",
+  "channel": "INSTAGRAM",
+  "description": "An Instagram Direct message. The same envelope as Messenger; only object differs.",
+  "source": "Instagram Platform webhooks reference, messages field",
+  "expect": {
+    "items": 1,
+    "actionable": 1,
+    "issues": 0,
+    "classifications": {
+      "MESSAGE_TEXT": 1
+    }
+  },
+  "payload": {
+    "object": "instagram",
+    "entry": [
+      {
+        "id": "17841400000000001",
+        "time": 1748737100000,
+        "messaging": [
+          {
+            "sender": {
+              "id": "6789012345678901"
+            },
+            "recipient": {
+              "id": "17841400000000001"
+            },
+            "timestamp": 1748737100000,
+            "message": {
+              "mid": "aWdfZG1fMQ",
+              "text": "Are you open on Sunday?"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
