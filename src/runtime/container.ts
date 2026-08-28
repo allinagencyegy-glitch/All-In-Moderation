@@ -31,6 +31,8 @@ import type { OutboxRelay, OutboxRelayStore, RelayTarget } from '../operations/e
 import { createOutboxRelay, createSimulatedRelayTarget } from '../operations/events/relay.ts';
 import type { HealthService, StoreProbe } from '../operations/health.ts';
 import { createHealthService } from '../operations/health.ts';
+import type { MetricsRegistry } from '../operations/metrics.ts';
+import { createMetricsRegistry } from '../operations/metrics.ts';
 import type { JobQueue } from '../operations/jobs/queue.ts';
 import type { TransactionRunner } from '../operations/transaction.ts';
 import { createKnowledgeGate } from '../knowledge/application/knowledge-gate.ts';
@@ -162,6 +164,8 @@ export interface CoreContainer {
   readonly relay: OutboxRelay;
   readonly relayTarget: RelayTarget;
   readonly health: HealthService;
+  /** Inbound transport counters, shared by ingest, normalisation and the health snapshot. */
+  readonly metrics: MetricsRegistry;
   createWorker(
     workerId: string,
     options?: { leaseMs?: number; types?: readonly JobType[] },
@@ -189,6 +193,8 @@ export interface ContainerOptions {
   /** When this process started, for uptime. Injected so a health snapshot is assertable. */
   readonly startedAt?: Date;
   readonly isShuttingDown?: () => boolean;
+  /** Injected so a test can assert on transport counters without reaching into the container. */
+  readonly metrics?: MetricsRegistry;
 }
 
 /** Assembles the in-memory persistence bundle. The Phase 0 default. */
@@ -241,6 +247,9 @@ export function createContainerWith(
       () => clock.nowMs(),
     );
   const logger = options.logger ?? createLogger({ level: config.logLevel, now: () => clock.now() });
+  // One registry for the whole process. Injectable so a test can assert on it, and so a suite
+  // that builds two containers does not see one's counts in the other's snapshot.
+  const metrics = options.metrics ?? createMetricsRegistry();
 
   const {
     accounts,
@@ -310,6 +319,7 @@ export function createContainerWith(
     clock,
     ids,
     logger,
+    metrics,
     config: {
       maxBodyBytes: config.ingest.maxBodyBytes,
       normalizeMaxAttempts: config.worker.maxAttempts,
@@ -331,11 +341,13 @@ export function createContainerWith(
     clock,
     ids,
     logger,
+    metrics,
     config: { moderatorMaxAttempts: config.worker.maxAttempts },
   });
 
   const moderator = createRunModeratorService({
     accounts,
+    connections,
     conversations,
     messages,
     runs,
@@ -477,6 +489,7 @@ export function createContainerWith(
       nodeEnv: config.nodeEnv,
     },
     isShuttingDown: options.isShuttingDown ?? (() => false),
+    metrics,
     thresholds: {
       inboundLagMs: config.health.inboundLagMs,
       outboxLagMs: config.health.outboxLagMs,
@@ -515,6 +528,7 @@ export function createContainerWith(
     relay,
     relayTarget,
     health,
+    metrics,
     createWorker(workerId, workerOptions) {
       return createWorker({
         queue,

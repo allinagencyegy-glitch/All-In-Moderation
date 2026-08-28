@@ -1,0 +1,38 @@
+{
+  "name": "facebook-messenger-text",
+  "channel": "FACEBOOK",
+  "description": "A plain inbound Messenger text message. The baseline happy path.",
+  "source": "Messenger Platform webhook reference, messages event",
+  "expect": {
+    "items": 1,
+    "actionable": 1,
+    "issues": 0,
+    "classifications": {
+      "MESSAGE_TEXT": 1
+    }
+  },
+  "payload": {
+    "object": "page",
+    "entry": [
+      {
+        "id": "109876543210987",
+        "time": 1748736000000,
+        "messaging": [
+          {
+            "sender": {
+              "id": "24680135791357913"
+            },
+            "recipient": {
+              "id": "109876543210987"
+            },
+            "timestamp": 1748736000000,
+            "message": {
+              "mid": "m_AAAAAAAAAA1",
+              "text": "Do you have any appointments this week?"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

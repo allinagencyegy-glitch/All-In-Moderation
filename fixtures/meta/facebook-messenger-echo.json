@@ -1,0 +1,40 @@
+{
+  "name": "facebook-messenger-echo",
+  "channel": "FACEBOOK",
+  "description": "Our own outbound message delivered back as an echo. The loop-breaker: it carries a perfectly valid mid and text.",
+  "source": "Messenger Platform webhook reference, message_echoes",
+  "expect": {
+    "items": 1,
+    "actionable": 0,
+    "issues": 0,
+    "classifications": {
+      "ECHO_SELF_MESSAGE": 1
+    }
+  },
+  "payload": {
+    "object": "page",
+    "entry": [
+      {
+        "id": "109876543210987",
+        "time": 1748736300000,
+        "messaging": [
+          {
+            "sender": {
+              "id": "109876543210987"
+            },
+            "recipient": {
+              "id": "24680135791357913"
+            },
+            "timestamp": 1748736300000,
+            "message": {
+              "mid": "m_AAAAAAAAAA4",
+              "is_echo": true,
+              "app_id": 123456789,
+              "text": "We have Thursday at 3pm available."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "name": "facebook-messenger-attachment",
+  "channel": "FACEBOOK",
+  "description": "An image attachment with no text. The content type must come from the attachment.",
+  "source": "Messenger Platform webhook reference, attachment payload",
+  "expect": {
+    "items": 1,
+    "actionable": 1,
+    "issues": 0,
+    "classifications": {
+      "MESSAGE_MEDIA": 1
+    }
+  },
+  "payload": {
+    "object": "page",
+    "entry": [
+      {
+        "id": "109876543210987",
+        "time": 1748736100000,
+        "messaging": [
+          {
+            "sender": {
+              "id": "24680135791357913"
+            },
+            "recipient": {
+              "id": "109876543210987"
+            },
+            "timestamp": 1748736100000,
+            "message": {
+              "mid": "m_AAAAAAAAAA2",
+              "attachments": [
+                {
+                  "type": "image",
+                  "payload": {
+                    "url": "https://scontent.xx.fbcdn.net/v/t1.0-9/example.jpg"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

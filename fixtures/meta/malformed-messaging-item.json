@@ -1,0 +1,35 @@
+{
+  "name": "malformed-messaging-item",
+  "channel": "FACEBOOK",
+  "description": "A messaging item with no sender. Without both ends there is nothing to attribute it to, and it must still land somewhere an operator can find it.",
+  "source": "Synthetic: a truncated Messenger delivery",
+  "expect": {
+    "items": 1,
+    "actionable": 0,
+    "issues": 0,
+    "classifications": {
+      "MALFORMED": 1
+    }
+  },
+  "payload": {
+    "object": "page",
+    "entry": [
+      {
+        "id": "109876543210987",
+        "time": 1748738400000,
+        "messaging": [
+          {
+            "recipient": {
+              "id": "109876543210987"
+            },
+            "timestamp": 1748738400000,
+            "message": {
+              "mid": "m_AAAAAAAAAB1",
+              "text": "orphaned"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

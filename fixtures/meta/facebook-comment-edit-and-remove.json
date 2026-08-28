@@ -1,0 +1,54 @@
+{
+  "name": "facebook-comment-edit-and-remove",
+  "channel": "FACEBOOK",
+  "description": "A comment edited and then deleted. Both are markers, never new customer turns.",
+  "source": "Page webhooks reference, feed field, verbs edited and remove",
+  "expect": {
+    "items": 2,
+    "actionable": 0,
+    "issues": 0,
+    "classifications": {
+      "COMMENT_EDIT": 1,
+      "COMMENT_REMOVE": 1
+    }
+  },
+  "payload": {
+    "object": "page",
+    "entry": [
+      {
+        "id": "109876543210987",
+        "time": 1748736900,
+        "changes": [
+          {
+            "field": "feed",
+            "value": {
+              "item": "comment",
+              "verb": "edited",
+              "created_time": 1748736900,
+              "comment_id": "109876543210987_9002",
+              "post_id": "109876543210987_8001",
+              "from": {
+                "id": "7712345678901235",
+                "name": "Another Customer"
+              },
+              "message": "Same question here (edited)"
+            }
+          },
+          {
+            "field": "feed",
+            "value": {
+              "item": "comment",
+              "verb": "remove",
+              "created_time": 1748736950,
+              "comment_id": "109876543210987_9002",
+              "post_id": "109876543210987_8001",
+              "from": {
+                "id": "7712345678901235"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

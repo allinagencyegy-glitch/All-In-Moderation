@@ -1,0 +1,39 @@
+{
+  "name": "facebook-messenger-postback",
+  "channel": "FACEBOOK",
+  "description": "A tapped button. A real customer signal we do not yet interpret: recorded, never actioned.",
+  "source": "Messenger Platform webhook reference, messaging_postbacks",
+  "expect": {
+    "items": 1,
+    "actionable": 0,
+    "issues": 0,
+    "classifications": {
+      "POSTBACK": 1
+    }
+  },
+  "payload": {
+    "object": "page",
+    "entry": [
+      {
+        "id": "109876543210987",
+        "time": 1748736500000,
+        "messaging": [
+          {
+            "sender": {
+              "id": "24680135791357913"
+            },
+            "recipient": {
+              "id": "109876543210987"
+            },
+            "timestamp": 1748736500000,
+            "postback": {
+              "mid": "m_AAAAAAAAAA5",
+              "title": "Book now",
+              "payload": "BOOK_NOW"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

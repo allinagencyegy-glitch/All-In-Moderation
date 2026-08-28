@@ -24,6 +24,31 @@ export const RAW_EVENT_STATES = [
 ] as const;
 export type RawEventState = (typeof RAW_EVENT_STATES)[number];
 
+/**
+ * What normalisation made of an event, recorded on the ledger row itself.
+ *
+ * Objective 7 asks that unsupported or unknown payload variants be durably recorded and
+ * classified explicitly. The payload was always durable; what was missing was the *verdict*. A
+ * raw event with `state: 'IGNORED'` tells an operator nothing about whether we ignored an echo, a
+ * delivery receipt, or a message type nobody has taught the parser yet — and those need three
+ * different people.
+ *
+ * Counts and classification names only. No text, no identifiers, no customer content: this
+ * summary is read by dashboards and pasted into tickets.
+ */
+export interface NormalizationSummary {
+  readonly parsedItems: number;
+  readonly createdMessages: number;
+  readonly duplicateItems: number;
+  /** Items whose routing identity no connection on this row owns. Fail-closed, never actioned. */
+  readonly unroutableItems: number;
+  /** Items on a surface this connection has not enabled. */
+  readonly surfaceDisabledItems: number;
+  readonly byClassification: Readonly<Record<string, number>>;
+  /** Envelope-level parse problems, capped. Structural complaints, never payload contents. */
+  readonly issues: readonly string[];
+}
+
 export interface RawInboundEvent {
   readonly id: RawInboundEventId;
   readonly accountId: AccountId;
@@ -38,6 +63,8 @@ export interface RawInboundEvent {
   readonly normalizedAt: Date | null;
   readonly producedMessageIds: readonly MessageId[];
   readonly error: { readonly code: string; readonly message: string } | null;
+  /** Null until normalisation runs. Never cleared afterwards. */
+  readonly normalization: NormalizationSummary | null;
   readonly traceId: TraceId;
 }
 
@@ -67,7 +94,9 @@ export function canTransitionRawEvent(from: RawEventState, to: RawEventState): b
 export function transitionRawEvent(
   event: RawInboundEvent,
   to: RawEventState,
-  patch: Partial<Pick<RawInboundEvent, 'normalizedAt' | 'producedMessageIds' | 'error'>> = {},
+  patch: Partial<
+    Pick<RawInboundEvent, 'normalizedAt' | 'producedMessageIds' | 'error' | 'normalization'>
+  > = {},
 ): RawInboundEvent {
   if (!canTransitionRawEvent(event.state, to)) {
     throw new InvalidTransitionError('RawInboundEvent', event.state, to);

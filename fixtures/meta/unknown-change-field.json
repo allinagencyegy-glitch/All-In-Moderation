@@ -1,0 +1,32 @@
+{
+  "name": "unknown-change-field",
+  "channel": "INSTAGRAM",
+  "description": "A subscription field we do not parse. Named for the layer that failed rather than shrugged at.",
+  "source": "Instagram Platform webhooks reference, story_insights field",
+  "expect": {
+    "items": 1,
+    "actionable": 0,
+    "issues": 0,
+    "classifications": {
+      "UNKNOWN_FIELD": 1
+    }
+  },
+  "payload": {
+    "object": "instagram",
+    "entry": [
+      {
+        "id": "17841400000000001",
+        "time": 1748738600,
+        "changes": [
+          {
+            "field": "story_insights",
+            "value": {
+              "media_id": "17895695668004553",
+              "impressions": 42
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

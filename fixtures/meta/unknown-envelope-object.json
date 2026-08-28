@@ -1,0 +1,27 @@
+{
+  "name": "unknown-envelope-object",
+  "channel": "FACEBOOK",
+  "description": "An object we have never seen. There is no channel to attribute it to and no identity to route it on.",
+  "source": "Synthetic: an unrecognised subscription object",
+  "expect": {
+    "items": 0,
+    "actionable": 0,
+    "issues": 1,
+    "classifications": {}
+  },
+  "payload": {
+    "object": "permissions",
+    "entry": [
+      {
+        "id": "109876543210987",
+        "time": 1748738500,
+        "changes": [
+          {
+            "field": "connected_instagram_account",
+            "value": {}
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -20,6 +20,8 @@ import type { EventOutbox } from '../../operations/events/outbox.ts';
 import { assertPublishable } from '../../operations/events/outbox.ts';
 import type { OutboxRelayStore } from '../../operations/events/relay.ts';
 import type { StoreProbe } from '../../operations/health.ts';
+import { connectionIdentities, identityConflict } from '../../moderation/domain/channel.ts';
+import { sameIdentity } from '../../moderation/domain/provider.ts';
 import type { ChannelIdentity } from '../../moderation/domain/identity.ts';
 import type {
   ChannelConnectionRepository,
@@ -85,6 +87,24 @@ export function createMemoryChannelConnectionRepository(
       return Promise.resolve(found ?? null);
     },
     save(connection) {
+      /*
+       * The in-memory twin of migration 0008's platform-wide primary key on
+       * `channel_connection_identities`.
+       *
+       * Enforced here rather than left to PostgreSQL because this is the constraint that makes
+       * cross-tenant misrouting structurally impossible, and a safety property that only holds in
+       * one of two adapters is a safety property the memory suite cannot regression-test. The
+       * error code matches the one the Postgres adapter translates a unique violation into.
+       */
+      for (const identity of connectionIdentities(connection)) {
+        const claimedBy = values(db.tables.connections).find(
+          (other) =>
+            other.id !== connection.id &&
+            other.provider === connection.provider &&
+            connectionIdentities(other).some((owned) => sameIdentity(owned, identity)),
+        );
+        if (claimedBy) return Promise.reject(identityConflict(identity));
+      }
       db.tables.connections.set(connection.id, connection);
       return Promise.resolve();
     },
@@ -227,6 +247,9 @@ export function createMemoryMessageRepository(db: MemoryDatabase): MessageReposi
       if (existing) return Promise.resolve({ inserted: false, record: existing });
       db.tables.messages.set(message.id, message);
       return Promise.resolve({ inserted: true, record: message });
+    },
+    findById(scope, id) {
+      return readInScope(scope, db.tables.messages.get(id), 'message');
     },
     listByConversation(scope, id) {
       return Promise.resolve(

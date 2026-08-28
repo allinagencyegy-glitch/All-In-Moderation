@@ -298,6 +298,7 @@ export const ALL_TABLES = [
   'raw_inbound_events',
   'channel_identities',
   'contact_identities',
+  'channel_connection_identities',
   'channel_connections',
   'account_memberships',
   'accounts',

@@ -20,6 +20,7 @@ import { createMemorySecretResolver } from '../adapters/memory/repositories.ts';
 import { createPostgresPersistence } from '../adapters/postgres/index.ts';
 import { createApplication } from './application.ts';
 import { loadConfig } from './config.ts';
+import { parseWebhookSecrets } from './secrets-env.ts';
 
 const required = (name: string): string => {
   const value = process.env[name];
@@ -54,7 +55,7 @@ async function main(): Promise<void> {
      *
      * `WEBHOOK_SECRETS` is JSON: { "secret://<ref>": { "appSecret": "...", "verifyToken": "..." } }
      */
-    secrets: createMemorySecretResolver(parseSecrets(process.env['WEBHOOK_SECRETS'])),
+    secrets: createMemorySecretResolver(parseWebhookSecrets(process.env['WEBHOOK_SECRETS'])),
   });
 
   const app = createApplication({
@@ -74,33 +75,6 @@ async function main(): Promise<void> {
   });
 
   await app.start();
-}
-
-function parseSecrets(
-  raw: string | undefined,
-): Map<string, { appSecret: string; verifyToken?: string }> {
-  if (!raw) return new Map();
-  const parsed: unknown = JSON.parse(raw);
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new TerminalError('CONFIG_INVALID', 'WEBHOOK_SECRETS must be a JSON object');
-  }
-  const out = new Map<string, { appSecret: string; verifyToken?: string }>();
-  for (const [ref, value] of Object.entries(parsed as Record<string, unknown>)) {
-    if (typeof value !== 'object' || value === null) {
-      throw new TerminalError('CONFIG_INVALID', `WEBHOOK_SECRETS['${ref}'] must be an object`);
-    }
-    const entry = value as Record<string, unknown>;
-    const appSecret = entry['appSecret'];
-    if (typeof appSecret !== 'string' || appSecret.length === 0) {
-      throw new TerminalError('CONFIG_INVALID', `WEBHOOK_SECRETS['${ref}'].appSecret is required`);
-    }
-    const verifyToken = entry['verifyToken'];
-    out.set(ref, {
-      appSecret,
-      ...(typeof verifyToken === 'string' && verifyToken.length > 0 ? { verifyToken } : {}),
-    });
-  }
-  return out;
 }
 
 main().catch((error: unknown) => {

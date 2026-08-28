@@ -1,0 +1,38 @@
+{
+  "name": "instagram-dm-unsend",
+  "channel": "INSTAGRAM",
+  "description": "A message the sender unsent. Instagram-only, and it must not surface as an empty customer turn.",
+  "source": "Instagram Platform webhooks reference, message.is_deleted",
+  "expect": {
+    "items": 1,
+    "actionable": 0,
+    "issues": 0,
+    "classifications": {
+      "MESSAGE_DELETE": 1
+    }
+  },
+  "payload": {
+    "object": "instagram",
+    "entry": [
+      {
+        "id": "17841400000000001",
+        "time": 1748737300000,
+        "messaging": [
+          {
+            "sender": {
+              "id": "6789012345678901"
+            },
+            "recipient": {
+              "id": "17841400000000001"
+            },
+            "timestamp": 1748737300000,
+            "message": {
+              "mid": "aWdfZG1fMg",
+              "is_deleted": true
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

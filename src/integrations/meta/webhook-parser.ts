@@ -1,332 +1,246 @@
 import type { Channel } from '../../core/channel.ts';
-import type { ContentType } from '../../moderation/domain/message.ts';
 import type {
   InboundEnvelopeParser,
   NormalizedInboundItem,
-  ParsedAttachment,
   ParseResult,
 } from '../../moderation/domain/inbound.ts';
-import { sha256Hex } from '../../platform/hash.ts';
+import type { ProviderIdentity } from '../../moderation/domain/provider.ts';
+import {
+  parseFacebookFeedChange,
+  parseInstagramCommentChange,
+  parseInstagramMentionChange,
+} from './comments.ts';
+import type { CommentParseContext } from './comments.ts';
+import { parseMessagingItem } from './messaging.ts';
+import { asArray, asRecord, asString, item } from './payload.ts';
+import { parseWhatsAppValue } from './whatsapp.ts';
 
 /**
- * Translates a Meta-shaped webhook envelope into channel-neutral inbound items.
+ * The Meta envelope dispatcher.
  *
- * This is the containment boundary for provider shapes: `entry`, `messaging`, `mid`, `psid` and
- * `changes` appear here and nowhere else. The domain speaks `ChannelIdentity` and `Message`, so a
- * new channel is a new parser rather than a change to the conversation model.
+ * This is the containment boundary for provider shapes: `entry`, `messaging`, `changes`, `mid`,
+ * `psid` and `wamid` appear in this directory and nowhere else. The domain speaks
+ * `NormalizedInboundItem`, so a new channel is a new parser plus a branch here rather than a
+ * change to the conversation model (ADR-001).
+ *
+ * The dispatch is two-dimensional and both dimensions matter. `object` selects the channel;
+ * within an entry, `messaging` and `changes` are different transports that Meta uses for
+ * different things on the *same* channel — a Facebook Page sends direct messages through
+ * `messaging` and public comments through `changes`, and Instagram does the same. WhatsApp uses
+ * `changes` only.
  *
  * The parser performs **no I/O and makes no decisions**. It is a total function over a payload,
- * which is what lets the whole ingest path be tested offline against captured envelopes.
+ * which is what lets the whole ingest path be tested offline against captured envelopes — and
+ * what lets the acceptance tooling replay a real delivery without touching a network.
  */
 
-const asRecord = (value: unknown): Record<string, unknown> | null =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
+interface ChannelBinding {
+  readonly channel: Channel;
+  /** How to interpret `entry.id` for this channel. */
+  readonly entryIdentityKind: ProviderIdentity['kind'];
+}
 
-const asString = (value: unknown): string | null => (typeof value === 'string' ? value : null);
-
-const asNumber = (value: unknown): number | null =>
-  typeof value === 'number' && Number.isFinite(value) ? value : null;
+function bindingFor(object: string | null): ChannelBinding | null {
+  switch (object) {
+    case null:
+      return null;
+    case 'page':
+      return { channel: 'FACEBOOK', entryIdentityKind: 'FACEBOOK_PAGE' };
+    case 'instagram':
+      return { channel: 'INSTAGRAM', entryIdentityKind: 'INSTAGRAM_ACCOUNT' };
+    case 'whatsapp_business_account':
+      return { channel: 'WHATSAPP', entryIdentityKind: 'WHATSAPP_BUSINESS_ACCOUNT' };
+    default:
+      return null;
+  }
+}
 
 export function parseMetaEnvelope(payload: unknown, receivedAt: Date): ParseResult {
   const root = asRecord(payload);
-  if (!root) return { items: [], ignored: 0, issues: ['payload is not an object'] };
+  if (!root) return { items: [], issues: ['payload is not an object'] };
 
   const object = asString(root['object']);
-  const channel: Channel =
-    object === 'instagram'
-      ? 'INSTAGRAM'
-      : object === 'whatsapp_business_account'
-        ? 'WHATSAPP'
-        : 'FACEBOOK';
-
-  const entries = Array.isArray(root['entry']) ? root['entry'] : [];
-  if (entries.length === 0) {
-    return { items: [], ignored: 0, issues: ['envelope contained no entries'] };
+  const binding = bindingFor(object);
+  if (!binding) {
+    // An object type we have never seen. There is no channel to attribute it to and no identity to
+    // route it on, so there is nothing to return but the fact that it happened — which the ledger
+    // already holds verbatim.
+    return { items: [], issues: [`unsupported envelope object '${object ?? 'missing'}'`] };
   }
+
+  const entries = asArray(root['entry']);
+  if (entries.length === 0) return { items: [], issues: ['envelope contained no entries'] };
 
   const items: NormalizedInboundItem[] = [];
   const issues: string[] = [];
-  let ignored = 0;
 
   for (const [entryIndex, rawEntry] of entries.entries()) {
     const entry = asRecord(rawEntry);
     if (!entry) {
-      issues.push(`entry[${entryIndex}] is not an object`);
+      issues.push(`entry[${String(entryIndex)}] is not an object`);
       continue;
     }
-    const connectionExternalId = asString(entry['id']);
-    if (!connectionExternalId) {
-      issues.push(`entry[${entryIndex}] has no id`);
+    const entryExternalId = asString(entry['id']);
+    if (!entryExternalId) {
+      issues.push(`entry[${String(entryIndex)}] has no id`);
       continue;
     }
 
-    const messaging = Array.isArray(entry['messaging']) ? entry['messaging'] : [];
-    for (const [i, rawItem] of messaging.entries()) {
-      const parsed = parseMessagingItem(rawItem, channel, connectionExternalId, receivedAt);
-      if (!parsed) {
-        issues.push(`entry[${entryIndex}].messaging[${i}] could not be parsed`);
-        continue;
-      }
-      if (parsed.kind === 'ECHO' || parsed.kind === 'RECEIPT') {
-        ignored += 1;
-        continue;
-      }
-      items.push(parsed);
-    }
-
-    const changes = Array.isArray(entry['changes']) ? entry['changes'] : [];
-    for (const [i, rawChange] of changes.entries()) {
-      const parsed = parseChangeItem(rawChange, channel, connectionExternalId, receivedAt);
-      if (!parsed) {
-        ignored += 1;
-        continue;
-      }
-      if (parsed.kind === 'UNSUPPORTED') {
-        issues.push(`entry[${entryIndex}].changes[${i}] is an unsupported change type`);
-        ignored += 1;
-        continue;
-      }
-      items.push(parsed);
-    }
-  }
-
-  return { items, ignored, issues };
-}
-
-function parseMessagingItem(
-  raw: unknown,
-  channel: Channel,
-  connectionExternalId: string,
-  receivedAt: Date,
-): NormalizedInboundItem | null {
-  const item = asRecord(raw);
-  if (!item) return null;
-
-  const sender = asString(asRecord(item['sender'])?.['id'] ?? null);
-  const recipient = asString(asRecord(item['recipient'])?.['id'] ?? null);
-  if (!sender || !recipient) return null;
-
-  const timestampMs = asNumber(item['timestamp']);
-  const providerTs = timestampMs !== null ? new Date(timestampMs) : receivedAt;
-
-  // Delivery and read receipts are legitimate traffic that carries no customer intent.
-  if (item['delivery'] !== undefined || item['read'] !== undefined) {
-    return receipt(channel, connectionExternalId, sender, recipient, providerTs);
-  }
-
-  const message = asRecord(item['message']);
-  if (!message) {
-    // Postbacks, opt-ins, referrals: real events we do not yet interpret. Recorded as UNSUPPORTED
-    // rather than dropped, so "the customer tapped a button and nothing happened" is visible.
-    return {
-      kind: 'UNSUPPORTED',
-      channel,
-      surface: 'DIRECT_MESSAGE',
-      connectionExternalId,
-      senderExternalId: sender,
-      recipientExternalId: recipient,
-      providerMessageId: null,
-      ...derivedKey(sender, recipient, providerTs, JSON.stringify(item)),
-      providerTs,
-      contentType: 'UNSUPPORTED',
-      text: null,
-      attachments: [],
-      threadRef: null,
+    // For Messenger and Instagram the entry id *is* the routable surface. For WhatsApp it is not,
+    // and `parseWhatsAppValue` derives the real one from the change metadata.
+    const routing: ProviderIdentity = {
+      kind: binding.entryIdentityKind,
+      externalId: entryExternalId,
     };
+
+    for (const [i, rawItem] of asArray(entry['messaging']).entries()) {
+      if (binding.channel === 'WHATSAPP') {
+        // WhatsApp has no `messaging` transport. Something that claims to be one is a shape we do
+        // not understand, not a message to be interpreted with another channel's rules.
+        issues.push(`entry[${String(entryIndex)}].messaging[${String(i)}] on a whatsapp envelope`);
+        continue;
+      }
+      const parsed = parseMessagingItem(
+        rawItem,
+        binding.channel,
+        routing,
+        entryExternalId,
+        receivedAt,
+      );
+      if (parsed) items.push(parsed);
+      else issues.push(`entry[${String(entryIndex)}].messaging[${String(i)}] is not an object`);
+    }
+
+    // Instagram delivers direct messages under `standby` when another app holds the thread. The
+    // items are real; acting on them would mean two apps replying to one customer.
+    for (const rawItem of asArray(entry['standby'])) {
+      const parsed = parseMessagingItem(
+        rawItem,
+        binding.channel,
+        routing,
+        entryExternalId,
+        receivedAt,
+      );
+      if (parsed)
+        items.push({ ...parsed, kind: 'UNSUPPORTED', classification: 'UNKNOWN_MESSAGING' });
+    }
+
+    for (const [i, rawChange] of asArray(entry['changes']).entries()) {
+      const change = asRecord(rawChange);
+      if (!change) {
+        issues.push(`entry[${String(entryIndex)}].changes[${String(i)}] is not an object`);
+        continue;
+      }
+      const outcome = parseChange(change, binding, routing, entryExternalId, receivedAt);
+      items.push(...outcome.items);
+      issues.push(...outcome.issues.map((issue) => `entry[${String(entryIndex)}]: ${issue}`));
+    }
   }
 
-  // An echo is our own outbound message coming back. Processing it would make the moderator
-  // reply to itself — the classic infinite loop in messaging integrations.
-  if (message['is_echo'] === true) {
-    return receipt(channel, connectionExternalId, sender, recipient, providerTs, 'ECHO');
+  return { items, issues };
+}
+
+function parseChange(
+  change: Record<string, unknown>,
+  binding: ChannelBinding,
+  routing: ProviderIdentity,
+  entryExternalId: string,
+  receivedAt: Date,
+): { items: readonly NormalizedInboundItem[]; issues: readonly string[] } {
+  const fieldName = asString(change['field']);
+  const value = change['value'];
+
+  if (binding.channel === 'WHATSAPP') {
+    if (fieldName !== 'messages') {
+      // `account_update`, `phone_number_quality_update`, `template_status_update` and friends.
+      // Account-level facts an operator needs to see, that carry no customer content.
+      return {
+        items: [
+          unknownField(
+            binding.channel,
+            routing,
+            entryExternalId,
+            receivedAt,
+            fieldName,
+            'ACCOUNT_UPDATE',
+          ),
+        ],
+        issues: [],
+      };
+    }
+    return parseWhatsAppValue(value, { entryExternalId, receivedAt });
   }
 
-  const mid = asString(message['mid']);
-  const text = asString(message['text']);
-  const attachments = parseAttachments(message['attachments']);
-  const contentType: ContentType =
-    text !== null
-      ? 'TEXT'
-      : attachments.length > 0
-        ? attachmentContentType(attachments[0]!.kind)
-        : 'UNSUPPORTED';
-
-  const keying = mid
-    ? { dedupeKey: mid, dedupeSource: 'PROVIDER_ID' as const }
-    : derivedKey(sender, recipient, providerTs, text ?? JSON.stringify(attachments));
-
-  return {
-    kind: 'MESSAGE',
-    channel,
-    surface: 'DIRECT_MESSAGE',
-    connectionExternalId,
-    senderExternalId: sender,
-    recipientExternalId: recipient,
-    providerMessageId: mid,
-    ...keying,
-    providerTs,
-    contentType,
-    text,
-    attachments,
-    threadRef: null,
+  const context: CommentParseContext = {
+    channel: binding.channel,
+    routing,
+    entryExternalId,
+    receivedAt,
+    // The connected surface's own ids, as far as the envelope reveals them. The connection's full
+    // identity set is applied again downstream, where it is authoritative.
+    selfIds: [entryExternalId],
   };
-}
 
-function parseChangeItem(
-  raw: unknown,
-  channel: Channel,
-  connectionExternalId: string,
-  receivedAt: Date,
-): NormalizedInboundItem | null {
-  const change = asRecord(raw);
-  if (!change) return null;
-  const field = asString(change['field']);
-  const value = asRecord(change['value']);
-  if (!value) return null;
-  if (field !== 'feed' && field !== 'comments')
-    return unsupportedChange(channel, connectionExternalId, receivedAt);
-  if (asString(value['item']) !== 'comment')
-    return unsupportedChange(channel, connectionExternalId, receivedAt);
-  // Only additions are inbound events; edits and removals are moderation signals handled later.
-  if (asString(value['verb']) !== 'add') return null;
+  if (binding.channel === 'FACEBOOK') {
+    if (fieldName !== 'feed') {
+      return {
+        items: [unknownField(binding.channel, routing, entryExternalId, receivedAt, fieldName)],
+        issues: [],
+      };
+    }
+    const parsed = parseFacebookFeedChange(value, context);
+    return parsed
+      ? { items: [parsed], issues: [] }
+      : { items: [], issues: [`feed change value is not an object`] };
+  }
 
-  const from = asString(asRecord(value['from'])?.['id'] ?? null);
-  const commentId = asString(value['comment_id']);
-  const postId = asString(value['post_id']);
-  if (!from || !commentId) return null;
-
-  const createdSeconds = asNumber(value['created_time']);
-  const providerTs = createdSeconds !== null ? new Date(createdSeconds * 1000) : receivedAt;
-  const text = asString(value['message']);
-
+  // Instagram.
+  if (fieldName === 'comments' || fieldName === 'live_comments') {
+    const parsed = parseInstagramCommentChange(value, context, fieldName);
+    return parsed
+      ? { items: [parsed], issues: [] }
+      : { items: [], issues: [`${fieldName} change value is not an object`] };
+  }
+  if (fieldName === 'mentions') {
+    const parsed = parseInstagramMentionChange(value, context);
+    return parsed
+      ? { items: [parsed], issues: [] }
+      : { items: [], issues: ['mentions value is not an object'] };
+  }
   return {
-    kind: 'COMMENT',
-    channel,
-    surface: 'PUBLIC_COMMENT',
-    connectionExternalId,
-    senderExternalId: from,
-    recipientExternalId: connectionExternalId,
-    providerMessageId: commentId,
-    dedupeKey: commentId,
-    dedupeSource: 'PROVIDER_ID',
-    providerTs,
-    contentType: text !== null ? 'TEXT' : 'UNSUPPORTED',
-    text,
-    attachments: [],
-    threadRef: postId,
-  };
-}
-
-function unsupportedChange(
-  channel: Channel,
-  connectionExternalId: string,
-  receivedAt: Date,
-): NormalizedInboundItem {
-  return {
-    kind: 'UNSUPPORTED',
-    channel,
-    surface: 'PUBLIC_COMMENT',
-    connectionExternalId,
-    senderExternalId: connectionExternalId,
-    recipientExternalId: connectionExternalId,
-    providerMessageId: null,
-    dedupeKey: `unsupported:${sha256Hex(`${connectionExternalId}:${receivedAt.getTime()}`)}`,
-    dedupeSource: 'DERIVED',
-    providerTs: receivedAt,
-    contentType: 'UNSUPPORTED',
-    text: null,
-    attachments: [],
-    threadRef: null,
-  };
-}
-
-function receipt(
-  channel: Channel,
-  connectionExternalId: string,
-  sender: string,
-  recipient: string,
-  providerTs: Date,
-  kind: 'ECHO' | 'RECEIPT' = 'RECEIPT',
-): NormalizedInboundItem {
-  return {
-    kind,
-    channel,
-    surface: 'DIRECT_MESSAGE',
-    connectionExternalId,
-    senderExternalId: sender,
-    recipientExternalId: recipient,
-    providerMessageId: null,
-    dedupeKey: `${kind.toLowerCase()}:${sha256Hex(`${sender}:${recipient}:${providerTs.getTime()}`)}`,
-    dedupeSource: 'DERIVED',
-    providerTs,
-    contentType: 'SYSTEM_NOTE',
-    text: null,
-    attachments: [],
-    threadRef: null,
+    items: [unknownField(binding.channel, routing, entryExternalId, receivedAt, fieldName)],
+    issues: [],
   };
 }
 
 /**
- * Derived item key for providers that supply no stable id.
+ * A change field we do not parse, recorded rather than dropped.
  *
- * `dedupeSource` records that the key is derived rather than authoritative, so the ambiguity is
- * visible in the data instead of being silently assumed away (ADR-006).
+ * The key is derived from the field name and the receipt instant, so two different unknown fields
+ * in one delivery do not collapse into one row — which would be exactly the silent loss objective
+ * 7 forbids.
  */
-function derivedKey(
-  sender: string,
-  recipient: string,
-  providerTs: Date,
-  content: string,
-): { dedupeKey: string; dedupeSource: 'DERIVED' } {
-  return {
-    dedupeKey: `derived:${sha256Hex(`${sender}|${recipient}|${providerTs.getTime()}|${content}`)}`,
-    dedupeSource: 'DERIVED',
-  };
-}
-
-function parseAttachments(raw: unknown): ParsedAttachment[] {
-  if (!Array.isArray(raw)) return [];
-  const out: ParsedAttachment[] = [];
-  for (const entry of raw) {
-    const attachment = asRecord(entry);
-    if (!attachment) continue;
-    const type = asString(attachment['type']) ?? 'other';
-    const url = asString(asRecord(attachment['payload'])?.['url'] ?? null);
-    out.push({ kind: attachmentKind(type), url });
-  }
-  return out;
-}
-
-function attachmentKind(type: string): ParsedAttachment['kind'] {
-  switch (type) {
-    case 'image':
-      return 'IMAGE';
-    case 'audio':
-      return 'AUDIO';
-    case 'video':
-      return 'VIDEO';
-    case 'file':
-      return 'DOCUMENT';
-    default:
-      return 'OTHER';
-  }
-}
-
-function attachmentContentType(kind: ParsedAttachment['kind']): ContentType {
-  switch (kind) {
-    case 'IMAGE':
-      return 'IMAGE';
-    case 'AUDIO':
-      return 'AUDIO';
-    case 'VIDEO':
-      return 'VIDEO';
-    case 'DOCUMENT':
-      return 'DOCUMENT';
-    case 'OTHER':
-      return 'UNSUPPORTED';
-  }
+function unknownField(
+  channel: Channel,
+  routing: ProviderIdentity,
+  entryExternalId: string,
+  receivedAt: Date,
+  fieldName: string | null,
+  classification: 'UNKNOWN_FIELD' | 'ACCOUNT_UPDATE' = 'UNKNOWN_FIELD',
+): NormalizedInboundItem {
+  return item({
+    kind: 'UNSUPPORTED',
+    classification,
+    channel,
+    surface: channel === 'WHATSAPP' ? 'DIRECT_MESSAGE' : 'PUBLIC_COMMENT',
+    routing,
+    entryExternalId,
+    senderExternalId: routing.externalId,
+    recipientExternalId: routing.externalId,
+    providerTs: receivedAt,
+    contentType: 'SYSTEM_NOTE',
+    derivedFrom: `field:${fieldName ?? 'missing'}`,
+  });
 }
 
 /** The Meta implementation of the domain's envelope-parser port. */

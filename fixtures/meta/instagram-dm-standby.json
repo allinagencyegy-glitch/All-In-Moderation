@@ -1,0 +1,38 @@
+{
+  "name": "instagram-dm-standby",
+  "channel": "INSTAGRAM",
+  "description": "A direct message delivered under standby because another app holds the thread. Acting on it would mean two apps replying to one customer.",
+  "source": "Messenger Platform handover protocol, standby array",
+  "expect": {
+    "items": 1,
+    "actionable": 0,
+    "issues": 0,
+    "classifications": {
+      "UNKNOWN_MESSAGING": 1
+    }
+  },
+  "payload": {
+    "object": "instagram",
+    "entry": [
+      {
+        "id": "17841400000000001",
+        "time": 1748737350000,
+        "standby": [
+          {
+            "sender": {
+              "id": "6789012345678901"
+            },
+            "recipient": {
+              "id": "17841400000000001"
+            },
+            "timestamp": 1748737350000,
+            "message": {
+              "mid": "aWdfZG1fc3RhbmRieQ",
+              "text": "Anyone there?"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

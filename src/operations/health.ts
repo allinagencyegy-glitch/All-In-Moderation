@@ -3,6 +3,8 @@ import { describeError } from '../platform/errors.ts';
 import type { BacklogSample } from './events/relay.ts';
 import type { DeadLetterStore } from './dead-letter.ts';
 import type { JobQueue } from './jobs/queue.ts';
+import type { MetricsRegistry, TransportSnapshot } from './metrics.ts';
+import { transportSnapshot } from './metrics.ts';
 
 /**
  * Operational health.
@@ -89,6 +91,15 @@ export interface HealthSnapshot {
   readonly deadLetters: { readonly count: number };
   readonly inbound: BacklogSample & { readonly ageMs: number | null };
   readonly outbox: BacklogSample & { readonly ageMs: number | null };
+  /**
+   * Inbound transport counters (objective 12).
+   *
+   * Process-local and aggregate: which *account* last received something is a scoped question and
+   * is answered by the operator CLI, which authenticates against the database. All zeroes when no
+   * registry was injected, which is indistinguishable from a process that has received nothing —
+   * acceptable, because the ledger is the authority on what actually arrived.
+   */
+  readonly transport: TransportSnapshot;
   /** Why the status is not OK. Empty on a healthy snapshot. */
   readonly reasons: readonly string[];
 }
@@ -110,8 +121,22 @@ export function createHealthService(deps: {
   /** Read live, so a snapshot taken during shutdown says so rather than lying. */
   isShuttingDown: () => boolean;
   thresholds?: HealthThresholds;
+  /** Optional: a health check must never fail because a counter was not wired up. */
+  metrics?: MetricsRegistry;
 }): HealthService {
   const thresholds = deps.thresholds ?? DEFAULT_HEALTH_THRESHOLDS;
+  const emptyTransport: TransportSnapshot = {
+    deliveries: {},
+    deliveriesByChannel: {},
+    unknownConnection: 0,
+    signatureRejected: {},
+    subscriptionVerification: {},
+    itemsByClassification: {},
+    itemsByChannel: {},
+    unroutableItems: 0,
+    surfaceDisabledItems: 0,
+    duplicateItems: 0,
+  };
   const uptime = (): number => deps.clock.nowMs() - deps.startedAt.getTime();
 
   const age = (sample: BacklogSample, now: Date): number | null =>
@@ -162,6 +187,14 @@ export function createHealthService(deps: {
         reasons.push(`oldest unrelayed domain event is ${String(outboxAge)}ms old`);
       }
 
+      const transport = deps.metrics ? transportSnapshot(deps.metrics) : emptyTransport;
+      // Not a degradation on its own — an unroutable item is *correctly* refused, and refusing is
+      // the safe outcome. It is still the loudest signal in the system that a connection is
+      // misconfigured or that a delivery arrived for a surface nobody claims, so it is named.
+      if (transport.unroutableItems > 0) {
+        reasons.push(`${String(transport.unroutableItems)} inbound items had no owning identity`);
+      }
+
       const status: HealthStatus = !reachable ? 'DOWN' : reasons.length > 0 ? 'DEGRADED' : 'OK';
 
       return {
@@ -185,6 +218,7 @@ export function createHealthService(deps: {
         deadLetters: { count: deadLetterCount },
         inbound: { ...inbound, ageMs: inboundAge },
         outbox: { ...outbox, ageMs: outboxAge },
+        transport,
         reasons,
       };
     },

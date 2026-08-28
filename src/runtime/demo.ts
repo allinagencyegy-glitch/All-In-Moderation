@@ -97,8 +97,16 @@ async function main(): Promise<void> {
     id: asId<ChannelConnectionId>('chc_demo'),
     accountId: account.id,
     channel: 'FACEBOOK',
+    provider: 'META',
     supportedSurfaces: ['DIRECT_MESSAGE', 'PUBLIC_COMMENT'],
+    enabledSurfaces: ['DIRECT_MESSAGE', 'PUBLIC_COMMENT'],
     externalId: PAGE_ID,
+    identities: [{ kind: 'FACEBOOK_PAGE', externalId: PAGE_ID }],
+    // Receive capabilities only. The demo walks the whole pipeline and still cannot reach an
+    // outbound effect, because the connection itself is not capable of one.
+    capabilities: ['RECEIVE_DIRECT_MESSAGE', 'RECEIVE_PUBLIC_COMMENT'],
+    transportMode: 'RECEIVE_ONLY',
+    subscriptionState: 'SUBSCRIBED',
     publicWebhookId: 'demo-hook',
     credentialsRef: CREDENTIALS_REF,
     status: 'ACTIVE',

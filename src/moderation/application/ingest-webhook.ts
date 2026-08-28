@@ -7,6 +7,8 @@ import { ID_PREFIX } from '../../platform/ids.ts';
 import { safeEqual, sha256Hex } from '../../platform/hash.ts';
 import type { TransactionRunner } from '../../operations/transaction.ts';
 import type { JobQueue } from '../../operations/jobs/queue.ts';
+import type { MetricLabels, MetricsRegistry } from '../../operations/metrics.ts';
+import { TRANSPORT_METRICS } from '../../operations/metrics.ts';
 import type { WebhookSignatureVerifier } from '../domain/inbound.ts';
 import type { RawInboundEvent } from '../domain/raw-event.ts';
 import type {
@@ -110,6 +112,11 @@ export interface IngestWebhookDeps {
   readonly clock: Clock;
   readonly ids: IdFactory;
   readonly logger: Logger;
+  /**
+   * Optional so every existing construction site keeps compiling, and because a counter must never
+   * be load-bearing: if it is absent the webhook still works, it is merely unobserved.
+   */
+  readonly metrics?: MetricsRegistry;
   readonly config?: IngestConfig;
 }
 
@@ -122,6 +129,9 @@ export interface IngestWebhookService {
 
 export function createIngestWebhookService(deps: IngestWebhookDeps): IngestWebhookService {
   const config = deps.config ?? DEFAULT_INGEST_CONFIG;
+  const count = (name: string, labels?: MetricLabels): void => {
+    deps.metrics?.increment(name, labels);
+  };
 
   return {
     /**
@@ -136,9 +146,11 @@ export function createIngestWebhookService(deps: IngestWebhookDeps): IngestWebho
     async verifySubscription(request) {
       const connection = await deps.connections.findByPublicWebhookId(request.publicWebhookId);
       if (!connection) {
-        deps.logger.warn('subscription verification for unknown connection', {
-          public_webhook_id: request.publicWebhookId,
-        });
+        // The webhook id is not logged. It is the only thing standing between a caller and a
+        // named tenant's endpoint, which makes it a bearer credential (objective 5), and on this
+        // branch it is also an attacker-chosen string being written into a log pipeline.
+        deps.logger.warn('subscription verification for unknown connection');
+        count(TRANSPORT_METRICS.subscriptionVerification, { outcome: 'UNKNOWN_CONNECTION' });
         return { status: 'UNKNOWN_CONNECTION', httpStatus: 404 };
       }
 
@@ -152,6 +164,7 @@ export function createIngestWebhookService(deps: IngestWebhookDeps): IngestWebho
         reason: 'MODE' | 'MALFORMED' | 'NOT_CONFIGURED' | 'TOKEN',
       ): SubscriptionVerificationOutcome => {
         logger.warn('subscription verification rejected', { reason });
+        count(TRANSPORT_METRICS.subscriptionVerification, { outcome: `REJECTED_${reason}` });
         return { status: 'REJECTED', reason, httpStatus: 403 };
       };
 
@@ -164,28 +177,34 @@ export function createIngestWebhookService(deps: IngestWebhookDeps): IngestWebho
       if (!safeEqual(expected, request.verifyToken)) return reject('TOKEN');
 
       logger.info('subscription verified');
+      count(TRANSPORT_METRICS.subscriptionVerification, { outcome: 'VERIFIED' });
       return { status: 'VERIFIED', challenge: request.challenge, httpStatus: 200 };
     },
 
     async ingest(request) {
       const connection = await deps.connections.findByPublicWebhookId(request.publicWebhookId);
       if (!connection) {
-        // No tenant to attribute this to, so there is nowhere safe to store it. Counted and
-        // logged; a sustained rate here means a stale or leaked webhook URL.
-        deps.logger.warn('webhook for unknown connection', {
-          public_webhook_id: request.publicWebhookId,
-        });
+        // No tenant to attribute this to, so there is nowhere safe to store it. Counted, not
+        // logged with the id: see the note in `verifySubscription`. A sustained rate here means a
+        // stale or leaked webhook URL, and the counter is what makes that visible.
+        deps.logger.warn('webhook for unknown connection');
+        count(TRANSPORT_METRICS.webhookUnknownConnection);
         return { status: 'UNKNOWN_CONNECTION', httpStatus: 404 };
       }
 
+      const channel = connection.channel;
       const logger = deps.logger.child({
         account_id: connection.accountId,
         channel_connection_id: connection.id,
-        channel: connection.channel,
+        channel,
       });
+      const delivery = (outcome: string): void => {
+        count(TRANSPORT_METRICS.webhookDelivery, { channel, outcome });
+      };
 
       if (Buffer.byteLength(request.rawBody, 'utf8') > config.maxBodyBytes) {
         logger.warn('webhook body exceeded size cap');
+        delivery('PAYLOAD_TOO_LARGE');
         return { status: 'PAYLOAD_TOO_LARGE', httpStatus: 413 };
       }
 
@@ -196,12 +215,14 @@ export function createIngestWebhookService(deps: IngestWebhookDeps): IngestWebho
         logger.warn('ingest declined for account state', {
           account_status: account?.status ?? 'MISSING',
         });
+        delivery('ACCOUNT_NOT_INGESTING');
         return { status: 'CONNECTION_DISABLED', httpStatus: 200 };
       }
       const scope = scopeForAccount(account);
 
       if (connection.status === 'DISABLED') {
         logger.warn('ingest declined for disabled connection');
+        delivery('CONNECTION_DISABLED');
         return { status: 'CONNECTION_DISABLED', httpStatus: 200 };
       }
 
@@ -231,6 +252,9 @@ export function createIngestWebhookService(deps: IngestWebhookDeps): IngestWebho
         error: signature.valid
           ? null
           : { code: 'SIGNATURE_INVALID', message: `signature ${signature.reason.toLowerCase()}` },
+        // Filled in by normalisation. Null here says "not yet looked at", which is a different
+        // fact from "looked at and found nothing" — and only the second one is ever benign.
+        normalization: null,
         traceId,
       };
 
@@ -241,6 +265,7 @@ export function createIngestWebhookService(deps: IngestWebhookDeps): IngestWebho
 
         if (!result.inserted) {
           logger.info('duplicate webhook delivery', { raw_event_id: result.record.id });
+          delivery('DUPLICATE');
           return { status: 'DUPLICATE', rawEventId: result.record.id, httpStatus: 200 };
         }
 
@@ -251,6 +276,8 @@ export function createIngestWebhookService(deps: IngestWebhookDeps): IngestWebho
             raw_event_id: result.record.id,
             reason: signature.reason,
           });
+          delivery('REJECTED_SIGNATURE');
+          count(TRANSPORT_METRICS.webhookSignatureRejected, { channel, reason: signature.reason });
           return { status: 'REJECTED_SIGNATURE', rawEventId: result.record.id, httpStatus: 200 };
         }
 
@@ -267,6 +294,7 @@ export function createIngestWebhookService(deps: IngestWebhookDeps): IngestWebho
         });
 
         logger.info('webhook accepted', { raw_event_id: result.record.id });
+        delivery('ACCEPTED');
         return { status: 'ACCEPTED', rawEventId: result.record.id, httpStatus: 200 };
       });
     },

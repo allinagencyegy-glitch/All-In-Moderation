@@ -19,10 +19,18 @@ import {
 } from '../../src/integrations/meta/signature.ts';
 import { createMockLlmProvider } from '../../src/integrations/llm/mock-provider.ts';
 import type { MockLlmProvider } from '../../src/integrations/llm/mock-provider.ts';
+import type { Channel, Surface } from '../../src/core/channel.ts';
 import type { ChannelConnection } from '../../src/moderation/domain/channel.ts';
+import type {
+  ConnectionCapability,
+  ProviderIdentity,
+  TransportMode,
+} from '../../src/moderation/domain/provider.ts';
+import { defaultIdentityKind, receiveCapabilityFor } from '../../src/moderation/domain/provider.ts';
 import type { KnowledgeEntry } from '../../src/knowledge/domain/knowledge-entry.ts';
 import type { AccountPackVersion } from '../../src/knowledge/domain/account-pack.ts';
 import { PACK_SCHEMA_VERSION } from '../../src/knowledge/domain/account-pack.ts';
+import type { ChannelSecrets } from '../../src/moderation/ports.ts';
 import type { IngestOutcome } from '../../src/moderation/application/ingest-webhook.ts';
 import type { Container, CoreContainer } from '../../src/runtime/container.ts';
 import { createContainer } from '../../src/runtime/container.ts';
@@ -62,6 +70,15 @@ export interface SeedOptions {
   readonly debounceMs?: number;
   readonly maxDelayMs?: number;
   readonly insufficientKnowledgeAction?: 'ASK_CLARIFICATION' | 'REQUEST_HUMAN_HANDOFF';
+  /** Transport shape. Defaults reproduce a Facebook Page in receive-only mode. */
+  readonly channel?: Channel;
+  readonly supportedSurfaces?: readonly Surface[];
+  /** Defaults to `supportedSurfaces`. Set `[]` to test a connection with nothing turned on. */
+  readonly enabledSurfaces?: readonly Surface[];
+  readonly identities?: readonly ProviderIdentity[];
+  readonly capabilities?: readonly ConnectionCapability[];
+  readonly transportMode?: TransportMode;
+  readonly connectionStatus?: ChannelConnection['status'];
 }
 
 export interface SeededAccount {
@@ -129,7 +146,19 @@ export const TEST_CONFIG: RuntimeConfig = {
   ingest: { maxBodyBytes: 1_000_000 },
 };
 
-export function createHarness(overrides: { config?: Partial<RuntimeConfig> } = {}): Harness {
+export function createHarness(
+  overrides: {
+    config?: Partial<RuntimeConfig>;
+    /**
+     * The secret bundle this deployment can resolve.
+     *
+     * Overridable so a suite can build the two configurations that must *fail*: a connection whose
+     * reference resolves to nothing, and one that resolves without a verify token. Both are
+     * indistinguishable from a provider misbehaving unless they are exercised deliberately.
+     */
+    secrets?: ReadonlyMap<string, string | ChannelSecrets>;
+  } = {},
+): Harness {
   const clock = createTestClock();
   const ids = createDeterministicIdFactory();
   const { logger, records } = createMemoryLogger('debug');
@@ -141,7 +170,7 @@ export function createHarness(overrides: { config?: Partial<RuntimeConfig> } = {
     ids,
     logger,
     provider,
-    secrets: TEST_SECRETS,
+    secrets: overrides.secrets ?? TEST_SECRETS,
     // Deterministic backoff: tests assert on scheduled times, not on luck.
     random: () => 0.5,
   });
@@ -182,15 +211,27 @@ export function createHarnessOver<C extends CoreContainer>(
       const scope = scopeForAccount(active);
       const account: Account = { ...active, status: options.accountStatus ?? 'ACTIVE' };
 
+      const channel = options.channel ?? 'FACEBOOK';
+      const supportedSurfaces = options.supportedSurfaces ?? ['DIRECT_MESSAGE', 'PUBLIC_COMMENT'];
+      const enabledSurfaces = options.enabledSurfaces ?? supportedSurfaces;
+      const externalId = options.pageId ?? `page-${suffix}`;
       const connection: ChannelConnection = {
         id: asId<ChannelConnectionId>(`chc_test_${suffix}`),
         accountId: account.id,
-        channel: 'FACEBOOK',
-        supportedSurfaces: ['DIRECT_MESSAGE', 'PUBLIC_COMMENT'],
-        externalId: options.pageId ?? `page-${suffix}`,
+        channel,
+        provider: 'META',
+        supportedSurfaces,
+        enabledSurfaces,
+        externalId,
+        identities: options.identities ?? [{ kind: defaultIdentityKind(channel), externalId }],
+        // Derived from what is enabled, so the default seed is always internally consistent. A
+        // test that wants an inconsistent connection has to ask for one explicitly.
+        capabilities: options.capabilities ?? enabledSurfaces.map(receiveCapabilityFor),
+        transportMode: options.transportMode ?? 'RECEIVE_ONLY',
+        subscriptionState: 'SUBSCRIBED',
         publicWebhookId: options.webhookId ?? `hook-${suffix}`,
         credentialsRef: TEST_CREDENTIALS_REF,
-        status: 'ACTIVE',
+        status: options.connectionStatus ?? 'ACTIVE',
         settings: {},
       };
       await container.connections.save(connection);

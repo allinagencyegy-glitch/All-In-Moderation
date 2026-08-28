@@ -1,0 +1,40 @@
+{
+  "name": "instagram-comment",
+  "channel": "INSTAGRAM",
+  "description": "An Instagram comment. No item, no verb, no created_time, and the id field is id rather than comment_id, every one of which the Phase 02A parser required or assumed.",
+  "source": "Instagram Platform webhooks reference, comments field",
+  "expect": {
+    "items": 1,
+    "actionable": 1,
+    "issues": 0,
+    "classifications": {
+      "COMMENT": 1
+    }
+  },
+  "payload": {
+    "object": "instagram",
+    "entry": [
+      {
+        "id": "17841400000000001",
+        "time": 1748737400,
+        "changes": [
+          {
+            "field": "comments",
+            "value": {
+              "id": "17865799348089977",
+              "text": "What are your prices?",
+              "from": {
+                "id": "7712345678901237",
+                "username": "a_customer"
+              },
+              "media": {
+                "id": "17895695668004551",
+                "media_product_type": "FEED"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

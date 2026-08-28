@@ -1,0 +1,41 @@
+{
+  "name": "whatsapp-missing-phone-number-id",
+  "channel": "WHATSAPP",
+  "description": "A delivery with no metadata.phone_number_id. There is no destination to attribute it to, and falling back to the WABA would be a routing decision made on missing evidence.",
+  "source": "Synthetic: a WhatsApp value with metadata omitted",
+  "expect": {
+    "items": 1,
+    "actionable": 1,
+    "issues": 1,
+    "classifications": {
+      "MESSAGE_TEXT": 1
+    }
+  },
+  "payload": {
+    "object": "whatsapp_business_account",
+    "entry": [
+      {
+        "id": "102290129340398",
+        "changes": [
+          {
+            "field": "messages",
+            "value": {
+              "messaging_product": "whatsapp",
+              "messages": [
+                {
+                  "from": "15551234567",
+                  "id": "wamid.HBgLMTU1NTEyMzQ1NjcVAgASGBQ5",
+                  "timestamp": "1748738300",
+                  "type": "text",
+                  "text": {
+                    "body": "hello?"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

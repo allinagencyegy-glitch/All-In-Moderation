@@ -1,0 +1,32 @@
+{
+  "name": "whatsapp-account-update",
+  "channel": "WHATSAPP",
+  "description": "An account-level fact carrying no customer content, delivered on the same subscription.",
+  "source": "WhatsApp Business Account webhooks reference, phone_number_quality_update",
+  "expect": {
+    "items": 1,
+    "actionable": 0,
+    "issues": 0,
+    "classifications": {
+      "ACCOUNT_UPDATE": 1
+    }
+  },
+  "payload": {
+    "object": "whatsapp_business_account",
+    "entry": [
+      {
+        "id": "102290129340398",
+        "changes": [
+          {
+            "field": "phone_number_quality_update",
+            "value": {
+              "display_phone_number": "15550001111",
+              "event": "FLAGGED",
+              "current_limit": "TIER_1K"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

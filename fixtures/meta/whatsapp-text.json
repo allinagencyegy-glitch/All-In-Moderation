@@ -1,0 +1,53 @@
+{
+  "name": "whatsapp-text",
+  "channel": "WHATSAPP",
+  "description": "A WhatsApp Cloud API text message. The routable identity is metadata.phone_number_id, not entry.id.",
+  "source": "WhatsApp Cloud API webhooks reference, text message",
+  "expect": {
+    "items": 1,
+    "actionable": 1,
+    "issues": 0,
+    "classifications": {
+      "MESSAGE_TEXT": 1
+    }
+  },
+  "payload": {
+    "object": "whatsapp_business_account",
+    "entry": [
+      {
+        "id": "102290129340398",
+        "changes": [
+          {
+            "field": "messages",
+            "value": {
+              "messaging_product": "whatsapp",
+              "metadata": {
+                "display_phone_number": "15550001111",
+                "phone_number_id": "106540352242922"
+              },
+              "contacts": [
+                {
+                  "profile": {
+                    "name": "A Customer"
+                  },
+                  "wa_id": "15551234567"
+                }
+              ],
+              "messages": [
+                {
+                  "from": "15551234567",
+                  "id": "wamid.HBgLMTU1NTEyMzQ1NjcVAgASGBQz",
+                  "timestamp": "1748737700",
+                  "type": "text",
+                  "text": {
+                    "body": "Hi, can I book for tomorrow?"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

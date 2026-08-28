@@ -27,9 +27,11 @@ permissions:
 
 env:
   # The floor the tree may never fall below. Phase 01 closed at 251 (147 in-memory + 104
-  # PostgreSQL); Phase 02A adds the runtime shell, the HTTP edge, the outbox relay and health.
+  # PostgreSQL); Phase 02A took it to 332 with the runtime shell, the HTTP edge, the outbox relay
+  # and health; Phase 02B adds the Meta payload corpus, the receive-only adversarial suite, the
+  # no-outbound architecture gate and the Postgres transport suite.
   # Adding suites means raising this deliberately; it can never shrink by accident.
-  MIN_TESTS: '332'
+  MIN_TESTS: '452'
 
 jobs:
   verify:
@@ -166,6 +168,7 @@ jobs:
             'postgres outbox relay'
             'postgres runtime shell'
             'postgres application lifecycle'
+            'postgres meta transport'
             'JobQueue contract: postgres'
           )
           #
@@ -180,6 +183,65 @@ jobs:
           done
 
           exit "$status"
+
+      - name: Receive-only is structural — no outbound Meta capability exists
+        shell: bash
+        timeout-minutes: 2
+        # `tests/architecture/no-outbound-meta.test.ts` asserts this inside the suite. It is
+        # repeated here as a standalone step for one reason: this is the single claim Phase 02B
+        # makes to a client whose real Page is attached, and a claim that important should fail
+        # its own named step rather than being one line inside a 452-test log.
+        run: |
+          set -euo pipefail
+
+          hosts='graph[.]facebook[.]com|graph[.]instagram[.]com|graph[.]whatsapp[.]com|api[.]whatsapp[.]com'
+          found="$(grep -rInE "$hosts" src/ || true)"
+          if [ -n "$found" ]; then
+            echo "$found"
+            echo "::error::a Meta API endpoint appears in src/ — outbound is no longer impossible"
+            exit 1
+          fi
+
+          # `fetch(` and friends. `node:http` is permitted for *serving*; constructing a client
+          # request is not. Half this codebase's value is prose explaining why a call is NOT made,
+          # and that prose necessarily names `fetch` — so comment lines are filtered out, exactly
+          # as the architecture test strips comments before scanning.
+          clients='[^A-Za-z_]fetch[[:space:]]*[(]|from .undici.|from .axios.|https?[.]request[[:space:]]*[(]'
+          hits="$(grep -rInE "$clients" src/ | grep -vE ':[0-9]+:[[:space:]]*([*]|//|/[*])' || true)"
+          if [ -n "$hits" ]; then
+            echo "$hits"
+            echo "::error::an outbound HTTP client appears in src/"
+            exit 1
+          fi
+          echo 'no outbound HTTP capability in src/'
+
+      - name: Shadow acceptance — the full inbound chain, and every outcome simulated
+        shell: bash
+        timeout-minutes: 3
+        # The same command an operator runs against a real deployment, in its offline mode. It
+        # posts every payload in fixtures/meta/ through the real ingest entry point with a real
+        # HMAC, drains the real worker, and asserts that outbound actions were produced *and* that
+        # none of them escaped SIMULATED. Both halves matter: without the first, the second is
+        # true for the trivial reason that there was nothing to check.
+        run: |
+          set -euo pipefail
+          LOG_LEVEL=error node src/runtime/cli/shadow-acceptance.ts --self-test > "$RUNNER_TEMP/shadow.log"
+          node -e '
+            const fs = require("node:fs");
+            const report = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/shadow.log", "utf8"));
+            console.log(JSON.stringify({
+              ok: report.ok,
+              fixtures: report.fixtures,
+              messagesCreated: report.messagesCreated,
+              outboundActions: report.outboundActions,
+              liveOutboundActions: report.liveOutboundActions,
+            }));
+            const fail = (m) => { console.error("::error::" + m); process.exitCode = 1; };
+            if (!report.ok) fail("shadow acceptance failed: " + report.failures.join("; "));
+            if (report.liveOutboundActions !== 0) fail("a non-simulated outbound action was produced");
+            if (!(report.outboundActions > 0)) fail("no outbound action was produced; the check was vacuous");
+            if (!(report.messagesCreated > 0)) fail("no message was created; the pipeline was not exercised");
+          '
 
       - name: Demo — end to end, and nothing may reach a network
         shell: bash

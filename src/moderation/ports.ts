@@ -5,6 +5,7 @@ import type {
   ChannelIdentityId,
   ConversationId,
   HandoffId,
+  MessageId,
   ModeratorRunId,
   RawInboundEventId,
 } from '../platform/ids.ts';
@@ -106,6 +107,14 @@ export interface ConversationRepository {
 export interface MessageRepository {
   /** Item-level dedupe, keyed on `(accountId, channel, dedupeKey)` (ADR-006). */
   insertIfNew(scope: AccountScope, message: Message): Promise<InsertResult<Message>>;
+  /**
+   * A single message by id.
+   *
+   * The request path never needs this — it always works a conversation at a time — but the shadow
+   * trace does: it walks forward from the message ids the ledger row recorded, which is what makes
+   * "these messages exist *because* this delivery arrived" a proof rather than a correlation.
+   */
+  findById(scope: AccountScope, id: MessageId): Promise<Message | null>;
   listByConversation(scope: AccountScope, id: ConversationId): Promise<readonly Message[]>;
   listAboveSeq(scope: AccountScope, id: ConversationId, seq: number): Promise<readonly Message[]>;
 }

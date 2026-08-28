@@ -41,7 +41,9 @@ import type { ModeratorRun, SkipReason } from '../domain/moderator-run.ts';
 import { checkStalenessGuard, transitionRun } from '../domain/moderator-run.ts';
 import type { OutboundActionPayload } from '../domain/outbound-action.ts';
 import { createOutboundAction } from '../domain/outbound-action.ts';
+import { isReceiveOnly } from '../domain/channel.ts';
 import type {
+  ChannelConnectionRepository,
   ConversationRepository,
   HandoffRepository,
   MessageRepository,
@@ -101,6 +103,13 @@ export const DEFAULT_RUN_CONFIG: RunModeratorConfig = {
 
 export interface RunModeratorDeps {
   readonly accounts: AccountRepository;
+  /**
+   * Read for one reason only: to discover whether the conversation's connection is receive-only.
+   *
+   * The moderator does not route, does not resolve identities and never contacts a provider. It
+   * asks the connection a single yes/no question, and a `null` answer counts as yes (objective 8).
+   */
+  readonly connections: ChannelConnectionRepository;
   readonly conversations: ConversationRepository;
   readonly messages: MessageRepository;
   readonly runs: ModeratorRunRepository;
@@ -355,6 +364,22 @@ export function createRunModeratorService(deps: RunModeratorDeps): RunModeratorS
           let outboundActionId: OutboundActionId | null = null;
 
           if (evaluated.authorization) {
+            // Two independent brakes, and either one alone is sufficient.
+            //
+            // `config.simulateOutbound` is process-wide: it says this deployment sends nothing.
+            // Receive-only is per connection: it says *this client's* transport is attached for
+            // observation. A real Meta connection can therefore be shadowed on a process that is
+            // otherwise armed, one tenant at a time (objective 8) — and a connection that has
+            // gone missing since the conversation was created simulates too, because "I could
+            // not find the connection" is not a licence to send.
+            const connection = await deps.connections.findById(scope, fresh.channelConnectionId);
+            const simulate =
+              config.simulateOutbound || connection === null || isReceiveOnly(connection);
+            if (simulate && !config.simulateOutbound) {
+              logger.info('outbound simulated by receive-only connection', {
+                channel_connection_id: fresh.channelConnectionId,
+              });
+            }
             const action = createOutboundAction(evaluated.authorization, {
               id: deps.ids.next<OutboundActionId>(ID_PREFIX.outboundAction),
               accountId: scope.accountId,
@@ -363,7 +388,7 @@ export function createRunModeratorService(deps: RunModeratorDeps): RunModeratorS
               ordinal: 0,
               payload: evaluated.payload,
               createdAt: deps.clock.now(),
-              simulate: config.simulateOutbound,
+              simulate,
             });
             await deps.outbound.save(scope, action);
             outboundActionId = action.id;

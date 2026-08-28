@@ -40,6 +40,15 @@ import type { OutboxRelayStore } from '../../operations/events/relay.ts';
 import type { StoreProbe } from '../../operations/health.ts';
 import { assertPublishable } from '../../operations/events/outbox.ts';
 import type { ChannelConnection } from '../../moderation/domain/channel.ts';
+import { connectionIdentities, identityConflict } from '../../moderation/domain/channel.ts';
+import type {
+  ConnectionCapability,
+  ProviderIdentity,
+  ProviderType,
+  SubscriptionState,
+  TransportMode,
+} from '../../moderation/domain/provider.ts';
+import { defaultIdentityKind } from '../../moderation/domain/provider.ts';
 import type {
   Conversation,
   OwnershipTransitionRecord,
@@ -49,7 +58,7 @@ import type { ChannelIdentity } from '../../moderation/domain/identity.ts';
 import type { Message, MessageAttachment } from '../../moderation/domain/message.ts';
 import type { ModeratorRun } from '../../moderation/domain/moderator-run.ts';
 import type { OutboundAction } from '../../moderation/domain/outbound-action.ts';
-import type { RawInboundEvent } from '../../moderation/domain/raw-event.ts';
+import type { NormalizationSummary, RawInboundEvent } from '../../moderation/domain/raw-event.ts';
 import type {
   ChannelConnectionRepository,
   ChannelIdentityRepository,
@@ -60,7 +69,7 @@ import type {
   OutboundActionRepository,
   RawInboundEventRepository,
 } from '../../moderation/ports.ts';
-import type { PostgresDatabase } from './client.ts';
+import type { PgClient, PostgresDatabase } from './client.ts';
 import { isUniqueViolation } from './errors.ts';
 
 /**
@@ -191,28 +200,70 @@ interface ConnectionRow {
   id: string;
   account_id: string;
   channel: string;
+  provider: string;
   supported_surfaces: string[];
+  enabled_surfaces: string[];
   external_id: string;
+  capabilities: string[];
+  transport_mode: string;
+  subscription_state: string;
   public_webhook_id: string;
   credentials_ref: string;
   status: string;
   settings: Record<string, unknown>;
 }
 
-const CONNECTION_COLUMNS = `id, account_id, channel, supported_surfaces, external_id,
+interface IdentityRow {
+  kind: string;
+  external_id: string;
+}
+
+const CONNECTION_COLUMNS = `id, account_id, channel, provider, supported_surfaces,
+  enabled_surfaces, external_id, capabilities, transport_mode, subscription_state,
   public_webhook_id, credentials_ref, status, settings`;
 
-const toConnection = (row: ConnectionRow): ChannelConnection => ({
+const toConnection = (
+  row: ConnectionRow,
+  identities: readonly ProviderIdentity[],
+): ChannelConnection => ({
   id: asId<ChannelConnectionId>(row.id),
   accountId: asId<AccountId>(row.account_id),
   channel: row.channel as Channel,
+  provider: row.provider as ProviderType,
   supportedSurfaces: textArray(row.supported_surfaces) as Surface[],
+  enabledSurfaces: textArray(row.enabled_surfaces) as Surface[],
   externalId: row.external_id,
+  identities,
+  capabilities: textArray(row.capabilities) as ConnectionCapability[],
+  transportMode: row.transport_mode as TransportMode,
+  subscriptionState: row.subscription_state as SubscriptionState,
   publicWebhookId: row.public_webhook_id,
   credentialsRef: row.credentials_ref,
   status: row.status as ChannelConnection['status'],
   settings: row.settings,
 });
+
+/**
+ * Identities are a separate table, so hydrating a connection is two statements.
+ *
+ * They are read inside the same scoped call as the row itself, which means the same transaction
+ * and the same tenant context — a connection can never be assembled from one account's row and
+ * another's identities.
+ */
+async function loadIdentities(
+  client: PgClient,
+  connectionId: string,
+): Promise<readonly ProviderIdentity[]> {
+  const result = await client.query<IdentityRow>(
+    `SELECT kind, external_id FROM channel_connection_identities
+      WHERE channel_connection_id = $1 ORDER BY kind, external_id`,
+    [connectionId],
+  );
+  return result.rows.map((row) => ({
+    kind: row.kind as ProviderIdentity['kind'],
+    externalId: row.external_id,
+  }));
+}
 
 export function createPostgresChannelConnectionRepository(
   db: PostgresDatabase,
@@ -244,25 +295,26 @@ export function createPostgresChannelConnectionRepository(
             [resolved.connection_id],
           );
           const row = result.rows[0];
-          return row ? toConnection(row) : null;
+          return row ? toConnection(row, await loadIdentities(client, row.id)) : null;
         },
         'connections:findByPublicWebhookId',
       );
     },
 
     async findById(scope, id) {
-      const row = await db.scoped(
+      const connection = await db.scoped(
         scope.accountId,
         async (client) => {
           const result = await client.query<ConnectionRow>(
             `SELECT ${CONNECTION_COLUMNS} FROM channel_connections WHERE id = $1`,
             [id],
           );
-          return result.rows[0] ?? null;
+          const row = result.rows[0];
+          return row ? toConnection(row, await loadIdentities(client, row.id)) : null;
         },
         'connections:findById',
       );
-      return await readInScope(scope, row ? toConnection(row) : null, 'channel_connection');
+      return await readInScope(scope, connection, 'channel_connection');
     },
 
     async findByExternalId(scope, channel, externalId) {
@@ -275,7 +327,7 @@ export function createPostgresChannelConnectionRepository(
             [channel, externalId],
           );
           const row = result.rows[0];
-          return row ? toConnection(row) : null;
+          return row ? toConnection(row, await loadIdentities(client, row.id)) : null;
         },
         'connections:findByExternalId',
       );
@@ -285,26 +337,97 @@ export function createPostgresChannelConnectionRepository(
       await db.scoped(
         connection.accountId,
         async (client) => {
+          /*
+           * `channel_connections` has carried a unique index on `(channel, external_id)` since
+           * 0002, and it fires *before* the identity table does — so without this translation the
+           * two adapters answer the same question differently: the memory one raises
+           * CONNECTION_IDENTITY_CONFLICT and this one raised a generic constraint violation.
+           *
+           * That divergence matters more than it looks. The memory suite is the regression test
+           * for the Postgres one, and "another client already owns this page" is a sentence an
+           * operator has to be able to act on, not a SQLSTATE that means something different
+           * depending on which environment produced it.
+           */
+          try {
+            await client.query(
+              `INSERT INTO channel_connections (id, account_id, channel, provider,
+                  supported_surfaces, enabled_surfaces, external_id, capabilities, transport_mode,
+                  subscription_state, public_webhook_id, credentials_ref, status, settings)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+               ON CONFLICT (id) DO UPDATE SET
+                 supported_surfaces = EXCLUDED.supported_surfaces,
+                 enabled_surfaces = EXCLUDED.enabled_surfaces,
+                 capabilities = EXCLUDED.capabilities,
+                 transport_mode = EXCLUDED.transport_mode,
+                 subscription_state = EXCLUDED.subscription_state,
+                 credentials_ref = EXCLUDED.credentials_ref,
+                 status = EXCLUDED.status,
+                 settings = EXCLUDED.settings`,
+              [
+                connection.id,
+                connection.accountId,
+                connection.channel,
+                connection.provider,
+                textArray(connection.supportedSurfaces),
+                textArray(connection.enabledSurfaces),
+                connection.externalId,
+                textArray(connection.capabilities),
+                connection.transportMode,
+                connection.subscriptionState,
+                connection.publicWebhookId,
+                connection.credentialsRef,
+                connection.status,
+                json(connection.settings),
+              ],
+            );
+          } catch (error) {
+            if (isUniqueViolation(error)) {
+              throw identityConflict({
+                kind: defaultIdentityKind(connection.channel),
+                externalId: connection.externalId,
+              });
+            }
+            throw error;
+          }
+
+          /*
+           * Identities are replaced, not merged.
+           *
+           * `save` takes the whole aggregate, so the row set it carries is the truth. Merging
+           * would make removing an identity impossible through this port, and an identity that
+           * cannot be removed is a routing claim a client keeps after they have left.
+           *
+           * The delete and the inserts share this call's transaction, so the platform-wide
+           * uniqueness constraint sees a consistent set: re-saving a connection unchanged cannot
+           * collide with itself.
+           */
           await client.query(
-            `INSERT INTO channel_connections (id, account_id, channel, supported_surfaces,
-                external_id, public_webhook_id, credentials_ref, status, settings)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-             ON CONFLICT (id) DO UPDATE SET
-               supported_surfaces = EXCLUDED.supported_surfaces,
-               credentials_ref = EXCLUDED.credentials_ref,
-               status = EXCLUDED.status, settings = EXCLUDED.settings`,
-            [
-              connection.id,
-              connection.accountId,
-              connection.channel,
-              textArray(connection.supportedSurfaces),
-              connection.externalId,
-              connection.publicWebhookId,
-              connection.credentialsRef,
-              connection.status,
-              json(connection.settings),
-            ],
+            `DELETE FROM channel_connection_identities WHERE channel_connection_id = $1`,
+            [connection.id],
           );
+          for (const identity of connectionIdentities(connection)) {
+            try {
+              await client.query(
+                `INSERT INTO channel_connection_identities
+                    (account_id, channel_connection_id, provider, kind, external_id)
+                 VALUES ($1,$2,$3,$4,$5)`,
+                [
+                  connection.accountId,
+                  connection.id,
+                  connection.provider,
+                  identity.kind,
+                  identity.externalId,
+                ],
+              );
+            } catch (error) {
+              // The primary key is platform-wide, so this fires when *another account* already
+              // claims this page, IG account, WABA or phone number. Translated to the same coded
+              // error the in-memory adapter raises, so the two behave identically under the shared
+              // tests — and so the message names the actual problem rather than a SQLSTATE.
+              if (isUniqueViolation(error)) throw identityConflict(identity);
+              throw error;
+            }
+          }
         },
         'connections:save',
       );
@@ -329,11 +452,13 @@ interface RawEventRow {
   normalized_at: Date | null;
   produced_message_ids: string[];
   error: CodedError | null;
+  normalization: NormalizationSummary | null;
   trace_id: string;
 }
 
 const RAW_EVENT_COLUMNS = `id, account_id, channel_connection_id, delivery_key, payload, headers,
-  signature_valid, state, received_at, normalized_at, produced_message_ids, error, trace_id`;
+  signature_valid, state, received_at, normalized_at, produced_message_ids, error, normalization,
+  trace_id`;
 
 const toRawEvent = (row: RawEventRow): RawInboundEvent => ({
   id: asId<RawInboundEventId>(row.id),
@@ -348,6 +473,7 @@ const toRawEvent = (row: RawEventRow): RawInboundEvent => ({
   normalizedAt: row.normalized_at,
   producedMessageIds: textArray(row.produced_message_ids).map((id) => asId<MessageId>(id)),
   error: row.error,
+  normalization: row.normalization,
   traceId: asId<TraceId>(row.trace_id),
 });
 
@@ -362,8 +488,8 @@ export function createPostgresRawInboundEventRepository(
           const inserted = await client.query<RawEventRow>(
             `INSERT INTO raw_inbound_events (id, account_id, channel_connection_id, delivery_key,
                 payload, headers, signature_valid, state, received_at, normalized_at,
-                produced_message_ids, error, trace_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+                produced_message_ids, error, normalization, trace_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
              ON CONFLICT (channel_connection_id, delivery_key) DO NOTHING
              RETURNING ${RAW_EVENT_COLUMNS}`,
             [
@@ -379,6 +505,7 @@ export function createPostgresRawInboundEventRepository(
               event.normalizedAt,
               textArray(event.producedMessageIds),
               event.error ? json(event.error) : null,
+              event.normalization ? json(event.normalization) : null,
               event.traceId,
             ],
           );
@@ -421,7 +548,8 @@ export function createPostgresRawInboundEventRepository(
           // lifecycle, not an edit, and the grant is what enforces that rather than convention.
           await client.query(
             `UPDATE raw_inbound_events
-                SET state = $2, normalized_at = $3, produced_message_ids = $4, error = $5
+                SET state = $2, normalized_at = $3, produced_message_ids = $4, error = $5,
+                    normalization = $6
               WHERE id = $1`,
             [
               event.id,
@@ -429,6 +557,7 @@ export function createPostgresRawInboundEventRepository(
               event.normalizedAt,
               textArray(event.producedMessageIds),
               event.error ? json(event.error) : null,
+              event.normalization ? json(event.normalization) : null,
             ],
           );
         },
@@ -861,12 +990,14 @@ interface MessageRow {
   received_at: Date;
   raw_inbound_event_id: string | null;
   outbound_action_id: string | null;
+  provider_context: Record<string, unknown>;
   redacted_at: Date | null;
 }
 
 const MESSAGE_COLUMNS = `id, account_id, conversation_id, seq, direction, author_kind,
   author_user_id, channel, provider_message_id, dedupe_key, dedupe_source, content_type, text,
-  attachments, provider_ts, received_at, raw_inbound_event_id, outbound_action_id, redacted_at`;
+  attachments, provider_ts, received_at, raw_inbound_event_id, outbound_action_id,
+  provider_context, redacted_at`;
 
 const toMessage = (row: MessageRow): Message => ({
   id: asId<MessageId>(row.id),
@@ -889,6 +1020,7 @@ const toMessage = (row: MessageRow): Message => ({
     ? asId<RawInboundEventId>(row.raw_inbound_event_id)
     : null,
   outboundActionId: row.outbound_action_id ? asId<OutboundActionId>(row.outbound_action_id) : null,
+  providerContext: row.provider_context,
   redactedAt: row.redacted_at,
 });
 
@@ -900,7 +1032,7 @@ export function createPostgresMessageRepository(db: PostgresDatabase): MessageRe
         async (client) => {
           const inserted = await client.query<MessageRow>(
             `INSERT INTO messages (${MESSAGE_COLUMNS})
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
              ON CONFLICT (account_id, channel, dedupe_key) DO NOTHING
              RETURNING ${MESSAGE_COLUMNS}`,
             [
@@ -922,6 +1054,7 @@ export function createPostgresMessageRepository(db: PostgresDatabase): MessageRe
               message.receivedAt,
               message.rawInboundEventId,
               message.outboundActionId,
+              json(message.providerContext),
               message.redactedAt,
             ],
           );
@@ -936,6 +1069,23 @@ export function createPostgresMessageRepository(db: PostgresDatabase): MessageRe
           return { inserted: false, record: toMessage(existing.rows[0]!) };
         },
         'messages:insertIfNew',
+      );
+    },
+
+    async findById(scope, id) {
+      return await db.scoped(
+        scope.accountId,
+        async (client) => {
+          // No `account_id` predicate, here or below: RLS supplies it, and writing it out again
+          // would suggest the isolation depends on remembering to (ADR-002, layer 2).
+          const result = await client.query<MessageRow>(
+            `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = $1`,
+            [id],
+          );
+          const row = result.rows[0];
+          return row ? toMessage(row) : null;
+        },
+        'messages:findById',
       );
     },
 

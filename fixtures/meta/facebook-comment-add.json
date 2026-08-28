@@ -1,0 +1,41 @@
+{
+  "name": "facebook-comment-add",
+  "channel": "FACEBOOK",
+  "description": "A top-level public comment on a Page post. parent_id equals post_id, which must not become a parent reference.",
+  "source": "Page webhooks reference, feed field, comment item",
+  "expect": {
+    "items": 1,
+    "actionable": 1,
+    "issues": 0,
+    "classifications": {
+      "COMMENT": 1
+    }
+  },
+  "payload": {
+    "object": "page",
+    "entry": [
+      {
+        "id": "109876543210987",
+        "time": 1748736600,
+        "changes": [
+          {
+            "field": "feed",
+            "value": {
+              "item": "comment",
+              "verb": "add",
+              "created_time": 1748736600,
+              "comment_id": "109876543210987_9001",
+              "post_id": "109876543210987_8001",
+              "parent_id": "109876543210987_8001",
+              "from": {
+                "id": "7712345678901234",
+                "name": "A Customer"
+              },
+              "message": "How much is a check-up?"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

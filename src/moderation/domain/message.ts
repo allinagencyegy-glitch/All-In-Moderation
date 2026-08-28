@@ -29,7 +29,7 @@ export type DedupeSource = 'PROVIDER_ID' | 'DERIVED';
 
 export interface MessageAttachment {
   readonly id: string;
-  readonly kind: 'IMAGE' | 'AUDIO' | 'VIDEO' | 'DOCUMENT' | 'OTHER';
+  readonly kind: 'IMAGE' | 'AUDIO' | 'VIDEO' | 'DOCUMENT' | 'STICKER' | 'OTHER';
   readonly providerUrl: string | null;
   readonly storageRef: string | null;
   readonly mimeType: string | null;
@@ -65,6 +65,16 @@ export interface Message {
   readonly receivedAt: Date;
   readonly rawInboundEventId: RawInboundEventId | null;
   readonly outboundActionId: OutboundActionId | null;
+  /**
+   * Provider provenance for an inbound message: reply context, ad referral, the envelope id it
+   * arrived under, the identity kind it was routed on.
+   *
+   * Deliberately open-shaped and deliberately *not* interpreted by the domain. Meta supplies some
+   * of these facts exactly once — an ad referral arrives with the first message and never again —
+   * so the choice is between keeping them at the moment of arrival or losing them permanently.
+   * Anything the platform needs to reason about is promoted to a typed field first.
+   */
+  readonly providerContext: Readonly<Record<string, unknown>>;
   readonly redactedAt: Date | null;
 }
 

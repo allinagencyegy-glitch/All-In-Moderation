@@ -1,0 +1,32 @@
+{
+  "name": "instagram-mention",
+  "channel": "INSTAGRAM",
+  "description": "Someone tagged the account in their own post. The thread belongs to another account, so it is not an inbound conversation.",
+  "source": "Instagram Platform webhooks reference, mentions field",
+  "expect": {
+    "items": 1,
+    "actionable": 0,
+    "issues": 0,
+    "classifications": {
+      "UNKNOWN_FIELD": 1
+    }
+  },
+  "payload": {
+    "object": "instagram",
+    "entry": [
+      {
+        "id": "17841400000000001",
+        "time": 1748737600,
+        "changes": [
+          {
+            "field": "mentions",
+            "value": {
+              "comment_id": "17865799348089979",
+              "media_id": "17895695668004552"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
