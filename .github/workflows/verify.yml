@@ -220,7 +220,9 @@ jobs:
           # and that prose necessarily names `fetch` — so comment lines are filtered out, exactly
           # as the architecture test strips comments before scanning.
           clients='[^A-Za-z_]fetch[[:space:]]*[(]|from .undici.|from .axios.|https?[.]request[[:space:]]*[(]'
-          hits="$(grep -rInE "$clients" src/                     | grep -vE ':[0-9]+:[[:space:]]*([*]|//|/[*])'                     | grep -vF "$egress_allowlist:" || true)"
+          hits="$(grep -rInE "$clients" src/ |
+            grep -vE ':[0-9]+:[[:space:]]*([*]|//|/[*])' |
+            grep -vF "$egress_allowlist:" || true)"
           if [ -n "$hits" ]; then
             echo "$hits"
             echo "::error::an outbound HTTP client appears in src/ outside the LLM allowlist"
@@ -235,7 +237,8 @@ jobs:
             exit 1
           fi
           # Word-bounded on both sides, or `parsed.content` reads as the domain `parsed.co`.
-          domains="$(grep -oE '[a-z0-9-]+([.][a-z0-9-]+)*[.](com|net|org|io|dev|ai|co)'                        "$egress_allowlist" | sort -u)"
+          domains="$(grep -oE '\b[a-z0-9-]+([.][a-z0-9-]+)*[.](com|net|org|io|dev|ai|co)\b' \
+            "$egress_allowlist" | sort -u)"
           if [ "$domains" != 'api.anthropic.com' ]; then
             echo "$domains"
             echo "::error::the egress adapter must name exactly one host, api.anthropic.com"
