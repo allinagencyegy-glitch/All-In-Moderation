@@ -17,6 +17,7 @@ import type { ChannelIdentity } from '../../moderation/domain/identity.ts';
 import type { Message } from '../../moderation/domain/message.ts';
 import type { ModeratorRun } from '../../moderation/domain/moderator-run.ts';
 import type { OutboundAction } from '../../moderation/domain/outbound-action.ts';
+import type { OutboundActionReview } from '../../moderation/domain/review.ts';
 import type { RawInboundEvent } from '../../moderation/domain/raw-event.ts';
 
 /**
@@ -41,6 +42,8 @@ export interface MemoryTables {
   messages: Map<string, Message>;
   runs: Map<string, ModeratorRun>;
   outbound: Map<string, OutboundAction>;
+  /** Append-only, like the table: a review is inserted and never updated. */
+  outboundReviews: OutboundActionReview[];
   handoffs: Map<string, Handoff>;
   knowledge: Map<string, KnowledgeEntry>;
   packs: Map<string, AccountPackVersion>;
@@ -70,6 +73,7 @@ function emptyTables(): MemoryTables {
     messages: new Map(),
     runs: new Map(),
     outbound: new Map(),
+    outboundReviews: [],
     handoffs: new Map(),
     knowledge: new Map(),
     packs: new Map(),
@@ -97,6 +101,7 @@ export function createMemoryDatabase(): MemoryDatabase {
     messages: new Map(tables.messages),
     runs: new Map(tables.runs),
     outbound: new Map(tables.outbound),
+    outboundReviews: [...tables.outboundReviews],
     handoffs: new Map(tables.handoffs),
     knowledge: new Map(tables.knowledge),
     packs: new Map(tables.packs),

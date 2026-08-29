@@ -32,6 +32,7 @@ import type {
   MessageRepository,
   ModeratorRunRepository,
   OutboundActionRepository,
+  OutboundActionReviewRepository,
   RawInboundEventRepository,
   SecretResolver,
 } from '../../moderation/ports.ts';
@@ -295,6 +296,24 @@ export function createMemoryOutboundActionRepository(db: MemoryDatabase): Outbou
         db.tables.outbound.set(action.id, action);
       });
     },
+    findById(scope, id) {
+      return readInScope(scope, db.tables.outbound.get(id), 'outbound_action');
+    },
+    // Mirrors the partial index `outbound_actions_review_idx`: suggested drafts still suppressed,
+    // oldest first.
+    listAwaitingReview(scope, limit) {
+      return Promise.resolve(
+        values(db.tables.outbound)
+          .filter(
+            (a) =>
+              a.accountId === scope.accountId &&
+              a.deliveryMode === 'SUGGESTED' &&
+              a.state === 'SUPPRESSED',
+          )
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+          .slice(0, limit),
+      );
+    },
     findByIdempotencyKey(scope, key) {
       const found = values(db.tables.outbound).find(
         (a) => a.accountId === scope.accountId && a.idempotencyKey === key,
@@ -306,6 +325,37 @@ export function createMemoryOutboundActionRepository(db: MemoryDatabase): Outbou
         values(db.tables.outbound)
           .filter((a) => a.accountId === scope.accountId && a.conversationId === id)
           .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()),
+      );
+    },
+  };
+}
+
+/**
+ * Append-only in memory too, so the contract is the same one the Postgres grants enforce: the
+ * review log is written once and never rewritten.
+ */
+export function createMemoryOutboundActionReviewRepository(
+  db: MemoryDatabase,
+): OutboundActionReviewRepository {
+  return {
+    save(scope, review) {
+      const violation = scopeViolation(scope, review, 'outbound_action_review');
+      if (violation) return Promise.reject(violation);
+      db.tables.outboundReviews.push(review);
+      return Promise.resolve();
+    },
+    listByAction(scope, id) {
+      return Promise.resolve(
+        db.tables.outboundReviews.filter(
+          (r) => r.accountId === scope.accountId && r.outboundActionId === id,
+        ),
+      );
+    },
+    listByConversation(scope, id) {
+      return Promise.resolve(
+        db.tables.outboundReviews.filter(
+          (r) => r.accountId === scope.accountId && r.conversationId === id,
+        ),
       );
     },
   };

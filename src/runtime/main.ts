@@ -64,6 +64,15 @@ async function main(): Promise<void> {
     clock,
     ids,
     logger,
+    /*
+     * The model credential, read here and nowhere else.
+     *
+     * Only consulted when `LLM_PROVIDER=anthropic`; with the default `mock` provider its absence
+     * is correct and the process starts without it. When it *is* required and missing, the
+     * container refuses to build and startup fails — a deployment that boots and then cannot
+     * think is worse than one that does not boot.
+     */
+    ...(process.env['ANTHROPIC_API_KEY'] ? { llmApiKey: process.env['ANTHROPIC_API_KEY'] } : {}),
     closePersistence: () => persistence.close(),
     installSignalHandlers: true,
     onShutdownComplete: () => {

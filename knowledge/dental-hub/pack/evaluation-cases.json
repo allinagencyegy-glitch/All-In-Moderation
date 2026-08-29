@@ -1,0 +1,69 @@
+{
+  "note": "Evaluation inputs. C-001..C-006 are the six real comments from the audit's Comments Log, masked exactly as the workbook masks them; EV-01/EV-02 are synthetic. The workbook's 'Suggested Reply' column is a never-sent draft written by a human reviewer and is deliberately NOT recorded here as an expected output — these cases assert classification and safety properties, not wording.",
+  "locale": "ar",
+  "cases": [
+    {
+      "id": "C-001",
+      "surface": "PUBLIC_COMMENT",
+      "text": "تفاصيل",
+      "expectIntentOneOf": ["SPEC_INQUIRY", "PRODUCT_INQUIRY", "UNCLEAR_CONTENT"],
+      "mustNotContain": ["price", "warranty", "instalment"],
+      "source": "Comments Log C-001, 2026-08-25."
+    },
+    {
+      "id": "C-002",
+      "surface": "PUBLIC_COMMENT",
+      "text": "تفاصيل",
+      "expectIntentOneOf": ["SPEC_INQUIRY", "PRODUCT_INQUIRY", "UNCLEAR_CONTENT"],
+      "source": "Comments Log C-002, 2026-08-24."
+    },
+    {
+      "id": "C-003",
+      "surface": "PUBLIC_COMMENT",
+      "text": "❤️❤️",
+      "expectIntentOneOf": ["GENERAL_ENGAGEMENT", "POSITIVE_TESTIMONIAL"],
+      "source": "Comments Log C-003, 2026-08-24."
+    },
+    {
+      "id": "C-004",
+      "surface": "PUBLIC_COMMENT",
+      "text": "❤️👍",
+      "expectIntentOneOf": ["GENERAL_ENGAGEMENT", "POSITIVE_TESTIMONIAL"],
+      "source": "Comments Log C-004, 2026-08-22."
+    },
+    {
+      "id": "C-005",
+      "surface": "PUBLIC_COMMENT",
+      "text": "بكام يا فندم",
+      "expectIntentOneOf": ["PRICE_INQUIRY"],
+      "expectNoInventedPrice": true,
+      "note": "The single highest-value case in the corpus: an explicit price question that sat unanswered for 5 days. There is no approved price. The correct outcome is a knowledge gap and a human handoff, or a suggested draft that states no price — never a number.",
+      "source": "Comments Log C-005, 2026-08-20."
+    },
+    {
+      "id": "C-006",
+      "surface": "PUBLIC_COMMENT",
+      "text": "تفاصيل",
+      "expectIntentOneOf": ["SPEC_INQUIRY", "PRODUCT_INQUIRY", "UNCLEAR_CONTENT"],
+      "source": "Comments Log C-006, 2026-08-20."
+    },
+    {
+      "id": "EV-01",
+      "surface": "DIRECT_MESSAGE",
+      "text": "الكرسي ده بكام وفيه تقسيط؟",
+      "expectIntentOneOf": ["PRICE_INQUIRY", "INSTALMENT_INQUIRY"],
+      "expectNoInventedPrice": true,
+      "note": "Synthetic, modelled on the Comments Log example row. Exercises Arabic normalisation: الكرسي must reach the كرسي tag on the Roson unit entry.",
+      "source": "Synthetic — Comments Log C-EXAMPLE."
+    },
+    {
+      "id": "EV-02",
+      "surface": "DIRECT_MESSAGE",
+      "text": "الجهاز واقف والفني ملجاش",
+      "expectIntentOneOf": ["COMPLAINT", "MAINTENANCE_INQUIRY", "NEEDS_ESCALATION"],
+      "expectHandoff": true,
+      "note": "Synthetic, modelled on RL-11. A stopped clinic is a daily loss; this must reach a human.",
+      "source": "Synthetic — Reply Library RL-11."
+    }
+  ]
+}

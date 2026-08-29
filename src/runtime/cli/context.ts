@@ -63,7 +63,15 @@ export function openCliContext(): CliContext {
     secrets: createMemorySecretResolver(parseWebhookSecrets(process.env['WEBHOOK_SECRETS'])),
   });
 
-  const container = createContainerWith(persistence, { config, clock, ids, logger });
+  const container = createContainerWith(persistence, {
+    config,
+    clock,
+    ids,
+    logger,
+    // Same boot-edge rule as `main.ts`. An admin command that needs the moderator — the shadow
+    // acceptance tool, for one — must be able to build the same provider the service builds.
+    ...(process.env['ANTHROPIC_API_KEY'] ? { llmApiKey: process.env['ANTHROPIC_API_KEY'] } : {}),
+  });
   return {
     container,
     persistence,

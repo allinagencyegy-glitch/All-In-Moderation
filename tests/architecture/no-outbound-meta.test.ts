@@ -38,6 +38,20 @@ const FILES = walk(SRC);
 const named = (file: string): string => relative(ROOT, file).split(sep).join('/');
 
 /**
+ * The one file permitted to reach a network, by name (ADR-012).
+ *
+ * Phase 02C connects a real language model, which needs exactly one outbound call. Rather than
+ * relaxing the scan below — which would have quietly turned "no egress" into "no egress we grep
+ * for" — the exception is granted to a single path and enforced from both directions:
+ * `no-outbound-meta.test.ts` keeps scanning everything *else* unchanged, and
+ * `llm-egress.test.ts` asserts that this file names one host, that the host is not Meta's, and
+ * that no domain module can import it.
+ *
+ * Adding a second entry here is a reviewable act with a name on it. That is the whole design.
+ */
+export const EGRESS_ALLOWLIST: readonly string[] = ['src/integrations/llm/anthropic-provider.ts'];
+
+/**
  * Comments must be stripped before scanning.
  *
  * Half of this codebase's value is in prose explaining *why* a call is not made, and that prose
@@ -88,6 +102,10 @@ describe('no outbound meta capability exists', () => {
     ];
     const violations: string[] = [];
     for (const file of FILES) {
+      // The single named exception (ADR-012). Everything else is scanned exactly as before, and
+      // `llm-egress.test.ts` holds this file to a stricter standard than the ban it is exempt
+      // from.
+      if (EGRESS_ALLOWLIST.includes(named(file))) continue;
       const source = code(file);
       for (const [pattern, label] of forbidden) {
         if (pattern.test(source)) violations.push(`${named(file)} uses ${label}`);
@@ -96,8 +114,20 @@ describe('no outbound meta capability exists', () => {
     assert.deepEqual(
       violations,
       [],
-      'src/ must contain no outbound HTTP client; receive-only is structural, not configured',
+      'src/ must contain no outbound HTTP client outside the egress allowlist; receive-only is structural, not configured',
     );
+  });
+
+  it('the egress allowlist names exactly one file, and that file exists', () => {
+    // The allowlist is the exception, so its size is itself an assertion. A second entry means
+    // someone widened the one thing this repository promises is narrow, and it fails here.
+    assert.equal(EGRESS_ALLOWLIST.length, 1, 'exactly one file in src/ may reach a network');
+    for (const entry of EGRESS_ALLOWLIST) {
+      assert.ok(
+        FILES.some((file) => named(file) === entry),
+        `${entry} is allowlisted for egress but does not exist — remove the entry`,
+      );
+    }
   });
 
   it('the meta integration is parsing and verification only', () => {

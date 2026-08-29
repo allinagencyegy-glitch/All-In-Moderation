@@ -20,6 +20,7 @@ import type {
   MessageId,
   ModeratorRunId,
   OutboundActionId,
+  OutboundActionReviewId,
   RawInboundEventId,
   TraceId,
   UserId,
@@ -58,6 +59,7 @@ import type { ChannelIdentity } from '../../moderation/domain/identity.ts';
 import type { Message, MessageAttachment } from '../../moderation/domain/message.ts';
 import type { ModeratorRun } from '../../moderation/domain/moderator-run.ts';
 import type { OutboundAction } from '../../moderation/domain/outbound-action.ts';
+import type { OutboundActionReview } from '../../moderation/domain/review.ts';
 import type { NormalizationSummary, RawInboundEvent } from '../../moderation/domain/raw-event.ts';
 import type {
   ChannelConnectionRepository,
@@ -67,6 +69,7 @@ import type {
   MessageRepository,
   ModeratorRunRepository,
   OutboundActionRepository,
+  OutboundActionReviewRepository,
   RawInboundEventRepository,
 } from '../../moderation/ports.ts';
 import type { PgClient, PostgresDatabase } from './client.ts';
@@ -1324,6 +1327,21 @@ export function createPostgresOutboundActionRepository(
       );
     },
 
+    async findById(scope, id) {
+      return await db.scoped(
+        scope.accountId,
+        async (client) => {
+          const result = await client.query<OutboundRow>(
+            `SELECT ${OUTBOUND_COLUMNS} FROM outbound_actions WHERE id = $1`,
+            [id],
+          );
+          const row = result.rows[0];
+          return row ? toOutbound(row) : null;
+        },
+        'outbound:findById',
+      );
+    },
+
     async findByIdempotencyKey(scope, key) {
       return await db.scoped(
         scope.accountId,
@@ -1339,6 +1357,25 @@ export function createPostgresOutboundActionRepository(
       );
     },
 
+    // Exactly the shape `outbound_actions_review_idx` covers (0009). Oldest first, because the
+    // oldest unanswered question is the one that costs the client money.
+    async listAwaitingReview(scope, limit) {
+      return await db.scoped(
+        scope.accountId,
+        async (client) => {
+          const result = await client.query<OutboundRow>(
+            `SELECT ${OUTBOUND_COLUMNS} FROM outbound_actions
+              WHERE state = 'SUPPRESSED' AND delivery_mode = 'SUGGESTED'
+              ORDER BY created_at, id
+              LIMIT $1`,
+            [limit],
+          );
+          return result.rows.map(toOutbound);
+        },
+        'outbound:listAwaitingReview',
+      );
+    },
+
     async listByConversation(scope, id) {
       return await db.scoped(
         scope.accountId,
@@ -1351,6 +1388,104 @@ export function createPostgresOutboundActionRepository(
           return result.rows.map(toOutbound);
         },
         'outbound:listByConversation',
+      );
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// outbound_action_reviews  (append-only)
+// ---------------------------------------------------------------------------------------------
+
+interface ReviewRow {
+  id: string;
+  account_id: string;
+  outbound_action_id: string;
+  conversation_id: string;
+  decision: string;
+  reviewer_user_id: string;
+  reason: string | null;
+  original_text: string | null;
+  edited_text: string | null;
+  decided_at: Date;
+}
+
+const REVIEW_COLUMNS = `id, account_id, outbound_action_id, conversation_id, decision,
+  reviewer_user_id, reason, original_text, edited_text, decided_at`;
+
+const toReview = (row: ReviewRow): OutboundActionReview => ({
+  id: asId<OutboundActionReviewId>(row.id),
+  accountId: asId<AccountId>(row.account_id),
+  outboundActionId: asId<OutboundActionId>(row.outbound_action_id),
+  conversationId: asId<ConversationId>(row.conversation_id),
+  decision: row.decision as OutboundActionReview['decision'],
+  reviewerUserId: asId<UserId>(row.reviewer_user_id),
+  reason: row.reason,
+  originalText: row.original_text,
+  editedText: row.edited_text,
+  decidedAt: row.decided_at,
+});
+
+export function createPostgresOutboundActionReviewRepository(
+  db: PostgresDatabase,
+): OutboundActionReviewRepository {
+  return {
+    // A plain INSERT with no ON CONFLICT clause. Every other repository here upserts; this one
+    // must not, because `app_runtime` holds no UPDATE grant on the table and an upsert would be a
+    // statement the role can never execute — better to fail on the write than to look like one
+    // that could succeed.
+    async save(scope, review) {
+      await db.scoped(
+        scope.accountId,
+        async (client) => {
+          await client.query(
+            `INSERT INTO outbound_action_reviews (${REVIEW_COLUMNS})
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+            [
+              review.id,
+              review.accountId,
+              review.outboundActionId,
+              review.conversationId,
+              review.decision,
+              review.reviewerUserId,
+              review.reason,
+              review.originalText,
+              review.editedText,
+              review.decidedAt,
+            ],
+          );
+        },
+        'outboundReview:save',
+      );
+    },
+
+    async listByAction(scope, id) {
+      return await db.scoped(
+        scope.accountId,
+        async (client) => {
+          const result = await client.query<ReviewRow>(
+            `SELECT ${REVIEW_COLUMNS} FROM outbound_action_reviews
+              WHERE outbound_action_id = $1 ORDER BY decided_at, id`,
+            [id],
+          );
+          return result.rows.map(toReview);
+        },
+        'outboundReview:listByAction',
+      );
+    },
+
+    async listByConversation(scope, id) {
+      return await db.scoped(
+        scope.accountId,
+        async (client) => {
+          const result = await client.query<ReviewRow>(
+            `SELECT ${REVIEW_COLUMNS} FROM outbound_action_reviews
+              WHERE conversation_id = $1 ORDER BY decided_at, id`,
+            [id],
+          );
+          return result.rows.map(toReview);
+        },
+        'outboundReview:listByConversation',
       );
     },
   };

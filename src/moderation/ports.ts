@@ -7,6 +7,7 @@ import type {
   HandoffId,
   MessageId,
   ModeratorRunId,
+  OutboundActionId,
   RawInboundEventId,
 } from '../platform/ids.ts';
 import type { ChannelConnection } from './domain/channel.ts';
@@ -16,6 +17,7 @@ import type { Handoff } from './domain/handoff.ts';
 import type { Message } from './domain/message.ts';
 import type { ModeratorRun } from './domain/moderator-run.ts';
 import type { OutboundAction } from './domain/outbound-action.ts';
+import type { OutboundActionReview } from './domain/review.ts';
 import type { RawInboundEvent } from './domain/raw-event.ts';
 
 /**
@@ -127,8 +129,32 @@ export interface ModeratorRunRepository {
 
 export interface OutboundActionRepository {
   save(scope: AccountScope, action: OutboundAction): Promise<void>;
+  findById(scope: AccountScope, id: OutboundActionId): Promise<OutboundAction | null>;
   findByIdempotencyKey(scope: AccountScope, key: string): Promise<OutboundAction | null>;
   listByConversation(scope: AccountScope, id: ConversationId): Promise<readonly OutboundAction[]>;
+  /**
+   * The review queue: suggested drafts still waiting for a person, oldest first.
+   *
+   * Oldest first because the audit's costliest finding was a price question that sat for five
+   * days. A newest-first queue makes exactly that failure invisible.
+   */
+  listAwaitingReview(scope: AccountScope, limit: number): Promise<readonly OutboundAction[]>;
+}
+
+/**
+ * Append-only. `save` inserts; there is no update and no delete, on this port or in the schema.
+ *
+ * A review is a statement a named person made at a point in time. Editing one would leave the
+ * record saying something they did not say, and the whole value of the table is that it can be
+ * trusted when someone asks why a particular reply went out.
+ */
+export interface OutboundActionReviewRepository {
+  save(scope: AccountScope, review: OutboundActionReview): Promise<void>;
+  listByAction(scope: AccountScope, id: OutboundActionId): Promise<readonly OutboundActionReview[]>;
+  listByConversation(
+    scope: AccountScope,
+    id: ConversationId,
+  ): Promise<readonly OutboundActionReview[]>;
 }
 
 export interface HandoffRepository {

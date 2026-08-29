@@ -1,0 +1,459 @@
+{
+  "accountSlug": "dental-hub",
+  "schemaVersion": "2026-08-27",
+  "notes": "Dental Hub Account Pack v1, derived from the 2026-08-25/26 read-only performance and moderation audit. Every customer-visible action is REQUIRE_APPROVAL: this account has no autonomous reply authority. See PROVENANCE.md for the cell-level source of each section.",
+  "sections": {
+    "profile": {
+      "display_name": "Dental Hub",
+      "industry": "Dental equipment supply, installation and after-sales service",
+      "market": "Egypt",
+      "primary_locale": "ar",
+      "surfaces_in_scope": ["DIRECT_MESSAGE", "PUBLIC_COMMENT"],
+      "audit_reference": "Dental_Hub_Performance_and_Moderation_Audit.xlsx (2026-08-26)",
+      "autonomy_posture": "REVIEW_ONLY",
+      "autonomy_note": "No reply drafted by this system may be sent automatically. Every customer-visible draft is a suggestion for a named human reviewer, who sends it themselves from Meta Inbox."
+    },
+    "brand_voice": {
+      "tone": "Egyptian Arabic, professional and warm. Address the customer as دكتور where the context is a dentist or clinic owner. Short sentences. Answer the question that was asked before asking anything back. Never more than one question per message.",
+      "language_policy": "Reply in Egyptian Arabic unless the customer wrote in English, in which case reply in English. Never mix scripts inside one sentence. Product model names stay in Latin script.",
+      "must_not_say": [
+        "أي سعر أو رقم سعر غير موجود حرفيًا في قسم المعرفة المعتمدة",
+        "أي خصم أو عرض أو نسبة تخفيض غير موجودة في قسم المعرفة المعتمدة",
+        "أي مدة ضمان أو نطاق تغطية ضمان",
+        "أي شرط تقسيط: عدد شهور، نسبة مقدم، قيمة قسط، أو اسم جهة تمويل",
+        "أي وعد بموعد توصيل أو تركيب أو زيارة صيانة",
+        "أي التزام بزمن رد أو زمن حل",
+        "الوكيل الحصري أو الوكيل المعتمد الوحيد",
+        "الأكثر مبيعًا أو الأفضل في مصر أو أي ادعاء تفضيلي",
+        "التركيب أو التدريب مجانًا",
+        "بنوصل ونركّب في كل محافظات مصر",
+        "قطع الغيار أصلية ومتوفرة",
+        "ضمان شامل",
+        "تم إرسال رسالة",
+        "كلمنا",
+        "تم",
+        "شيك الرسايل",
+        "خلاص الكمية",
+        "Never state a price, discount, instalment term, warranty duration, delivery date or response-time commitment that does not appear verbatim in the approved knowledge section",
+        "Never claim exclusive agency, authorised-dealer status, or best-selling status",
+        "Never reply with an acknowledgement alone — 'noted', 'check your messages', 'we sent you a message' — with no information and no next step",
+        "Never ask for a national ID number, bank details or card details on any surface",
+        "Never argue with, contradict or dismiss an unhappy customer",
+        "Never restate a customer's phone number, address or name in a public comment"
+      ]
+    },
+    "intent_taxonomy": {
+      "intents": [
+        {
+          "code": "PRICE_INQUIRY",
+          "description": "Asking the price or cost of a product or a package (بكام، السعر، كام سعره).",
+          "requires_knowledge": true
+        },
+        {
+          "code": "PRODUCT_INQUIRY",
+          "description": "Asking whether a product or model is offered, or asking for a recommendation.",
+          "requires_knowledge": true
+        },
+        {
+          "code": "SPEC_INQUIRY",
+          "description": "Asking for specifications, details or a catalogue (تفاصيل، مواصفات).",
+          "requires_knowledge": true
+        },
+        {
+          "code": "INSTALMENT_INQUIRY",
+          "description": "Asking about instalments or financing (تقسيط، تمويل).",
+          "requires_knowledge": true
+        },
+        {
+          "code": "WARRANTY_INQUIRY",
+          "description": "Asking about warranty duration or coverage (الضمان).",
+          "requires_knowledge": true
+        },
+        {
+          "code": "MAINTENANCE_INQUIRY",
+          "description": "Asking about maintenance, spare parts or after-sales service (صيانة، قطع غيار).",
+          "requires_knowledge": true
+        },
+        {
+          "code": "DELIVERY_INSTALL_INQUIRY",
+          "description": "Asking about delivery coverage, installation or training (توصيل، تركيب).",
+          "requires_knowledge": true
+        },
+        {
+          "code": "CONTACT_REQUEST",
+          "description": "Asking for a phone number or a way to get in touch.",
+          "requires_knowledge": true
+        },
+        {
+          "code": "HIGH_PURCHASE_INTENT",
+          "description": "Ready to buy, asking for a formal quotation, or equipping a full clinic.",
+          "requires_knowledge": true
+        },
+        {
+          "code": "MEDIUM_PURCHASE_INTENT",
+          "description": "Comparing options or evaluating, with no immediate commitment.",
+          "requires_knowledge": true
+        },
+        {
+          "code": "GENERAL_ENGAGEMENT",
+          "description": "A greeting, an emoji, a reaction or small talk with no question in it."
+        },
+        {
+          "code": "POSITIVE_TESTIMONIAL",
+          "description": "Praise or a positive experience shared publicly."
+        },
+        {
+          "code": "COMPLAINT",
+          "description": "A grievance: a delay, a fault, a failed visit, a billing dispute.",
+          "escalate": true
+        },
+        {
+          "code": "OBJECTION",
+          "description": "Price resistance or a stated reason not to buy (غالي).",
+          "escalate": true
+        },
+        {
+          "code": "SPAM",
+          "description": "Advertising, suspicious links or repeated unrelated comments."
+        },
+        {
+          "code": "UNCLEAR_CONTENT",
+          "description": "Text that cannot be interpreted with confidence."
+        },
+        {
+          "code": "NEEDS_ESCALATION",
+          "description": "Anything legal, medical-regulatory, press-related, or threatening public escalation.",
+          "escalate": true
+        }
+      ]
+    },
+    "routing": {
+      "debounce_ms": 2500,
+      "max_delay_ms": 8000,
+      "intent_routes": [
+        {
+          "intent": "PRICE_INQUIRY",
+          "handoff_kind": "SALES",
+          "queue": "sales"
+        },
+        {
+          "intent": "INSTALMENT_INQUIRY",
+          "handoff_kind": "SALES",
+          "queue": "sales"
+        },
+        {
+          "intent": "HIGH_PURCHASE_INTENT",
+          "handoff_kind": "SALES",
+          "queue": "sales"
+        },
+        {
+          "intent": "MEDIUM_PURCHASE_INTENT",
+          "handoff_kind": "SALES",
+          "queue": "sales"
+        },
+        {
+          "intent": "OBJECTION",
+          "handoff_kind": "SALES",
+          "queue": "sales"
+        },
+        {
+          "intent": "PRODUCT_INQUIRY",
+          "handoff_kind": "SALES",
+          "queue": "moderation"
+        },
+        {
+          "intent": "SPEC_INQUIRY",
+          "handoff_kind": "SALES",
+          "queue": "moderation"
+        },
+        {
+          "intent": "WARRANTY_INQUIRY",
+          "handoff_kind": "SUPPORT",
+          "queue": "after-sales"
+        },
+        {
+          "intent": "MAINTENANCE_INQUIRY",
+          "handoff_kind": "SUPPORT",
+          "queue": "after-sales"
+        },
+        {
+          "intent": "DELIVERY_INSTALL_INQUIRY",
+          "handoff_kind": "SUPPORT",
+          "queue": "after-sales"
+        },
+        {
+          "intent": "CONTACT_REQUEST",
+          "handoff_kind": "HUMAN_AGENT",
+          "queue": "moderation"
+        },
+        {
+          "intent": "COMPLAINT",
+          "handoff_kind": "SUPPORT",
+          "queue": "management"
+        },
+        {
+          "intent": "NEEDS_ESCALATION",
+          "handoff_kind": "HUMAN_AGENT",
+          "queue": "management"
+        }
+      ]
+    },
+    "authority_matrix": {
+      "rules": [
+        {
+          "surface": "*",
+          "action": "NO_ACTION",
+          "effect": "ALLOW"
+        },
+        {
+          "surface": "*",
+          "action": "REQUEST_HUMAN_HANDOFF",
+          "effect": "ALLOW"
+        },
+        {
+          "surface": "*",
+          "action": "ADD_TAG",
+          "effect": "ALLOW",
+          "note": "Internal classification only; never visible to a customer."
+        },
+        {
+          "surface": "DIRECT_MESSAGE",
+          "action": "ANSWER_FROM_KNOWLEDGE",
+          "effect": "REQUIRE_APPROVAL",
+          "note": "Drafted, then reviewed and sent by a named human. Never autonomous."
+        },
+        {
+          "surface": "DIRECT_MESSAGE",
+          "action": "ASK_CLARIFICATION",
+          "effect": "REQUIRE_APPROVAL",
+          "note": "Even a question is a message from the brand."
+        },
+        {
+          "surface": "DIRECT_MESSAGE",
+          "action": "MOVE_TO_DIRECT_MESSAGE",
+          "effect": "DENY",
+          "note": "Already a direct message."
+        },
+        {
+          "surface": "PUBLIC_COMMENT",
+          "action": "PUBLIC_REPLY",
+          "effect": "REQUIRE_APPROVAL",
+          "note": "The highest-risk surface. A public reply is permanent and quotable."
+        },
+        {
+          "surface": "PUBLIC_COMMENT",
+          "action": "ASK_CLARIFICATION",
+          "effect": "REQUIRE_APPROVAL"
+        },
+        {
+          "surface": "PUBLIC_COMMENT",
+          "action": "MOVE_TO_DIRECT_MESSAGE",
+          "effect": "REQUIRE_APPROVAL",
+          "note": "RL-11: a complaint moves to DM, but only after a public acknowledgement."
+        },
+        {
+          "surface": "*",
+          "action": "CAPTURE_FIELD",
+          "effect": "DENY",
+          "note": "No field capture until a data-handling notice is agreed with the client."
+        },
+        {
+          "surface": "*",
+          "action": "CREATE_LEAD_CANDIDATE",
+          "effect": "DENY",
+          "note": "No CRM in this phase."
+        },
+        {
+          "surface": "*",
+          "action": "HIDE_COMMENT",
+          "effect": "DENY",
+          "note": "RL-18: hiding requires page-owner approval and is not a system action."
+        },
+        {
+          "surface": "*",
+          "action": "DELETE_COMMENT",
+          "effect": "DENY"
+        },
+        {
+          "surface": "*",
+          "action": "BLOCK_USER",
+          "effect": "DENY"
+        }
+      ]
+    },
+    "escalation": {
+      "handoff_sla_ms": 3600000,
+      "handoff_fallback_to_ai": false,
+      "insufficient_knowledge_action": "REQUEST_HUMAN_HANDOFF"
+    },
+    "public_comment_rules": {
+      "never_request_personal_data": true,
+      "never_restate_personal_data": true,
+      "acknowledge_before_moving_to_dm": true,
+      "spam_handling": "Classify as SPAM and take no action. Hiding a comment requires page-owner approval and is not performed by this system.",
+      "complaint_handling": "Reply publicly to acknowledge, then hand off. Never leave a complaint unanswered in the thread and never delete it.",
+      "source": "Reply Library RL-11, RL-12, RL-16, RL-18."
+    },
+    "sla": {
+      "status": "PROPOSED",
+      "status_note": "These targets are proposed by the audit. Dental Hub has no documented SLA and no evidence of one was found. They are NOT commitments and must never be stated to a customer.",
+      "targets": [
+        {
+          "channel": "DIRECT_MESSAGE",
+          "metric": "first_reply",
+          "hours": 1,
+          "owner": "Moderation"
+        },
+        {
+          "channel": "PUBLIC_COMMENT",
+          "metric": "first_reply",
+          "hours": 2,
+          "owner": "Moderation"
+        },
+        {
+          "channel": "WHATSAPP",
+          "metric": "first_reply",
+          "hours": 0.5,
+          "owner": "Sales"
+        },
+        {
+          "channel": "ANY",
+          "metric": "quotation_sent",
+          "hours": 24,
+          "owner": "Sales"
+        },
+        {
+          "channel": "ANY",
+          "metric": "quotation_follow_up",
+          "hours": 48,
+          "owner": "Sales"
+        },
+        {
+          "channel": "ANY",
+          "metric": "complaint_first_reply",
+          "hours": 1,
+          "owner": "Management"
+        },
+        {
+          "channel": "ANY",
+          "metric": "complaint_resolution",
+          "hours": 72,
+          "owner": "Management / After-sales"
+        },
+        {
+          "channel": "ANY",
+          "metric": "maintenance_visit_scheduled",
+          "hours": 48,
+          "owner": "After-sales"
+        }
+      ],
+      "business_hours": "9:00–18:00, Saturday–Thursday (WhatsApp 9:00–20:00 daily) — proposed, unconfirmed.",
+      "source": "SLA Tracker §A r6:r13."
+    },
+    "handoff_contract": {
+      "include_in_context": [
+        "surface",
+        "intent_code",
+        "intent_confidence",
+        "policy_reason",
+        "knowledge_refs",
+        "drafted_reply"
+      ],
+      "reviewer_must_confirm": [
+        "No price, discount, instalment term or warranty duration appears in the text unless it came from an approved knowledge entry.",
+        "No delivery date or response-time commitment appears in the text.",
+        "No exclusivity or best-selling claim appears in the text.",
+        "The reply answers the question that was actually asked."
+      ],
+      "delivery": "The reviewer copies the approved text and sends it themselves from Meta Inbox. This system has no send capability."
+    },
+    "qualification": {
+      "fields_of_interest": [
+        "clinic_status_new_or_existing",
+        "governorate",
+        "product_category",
+        "chair_count",
+        "budget_range"
+      ],
+      "collection_rule": "Ask at most one qualifying question per message, and only after the customer's own question has been answered or acknowledged.",
+      "capture_enabled": false,
+      "capture_note": "CAPTURE_FIELD is DENY in the authority matrix. These fields describe what a human reviewer should try to establish, not what the system may store.",
+      "source": "Reply Library RL-02, RL-08, RL-16; Taxonomy & Lists columns F, G, H."
+    },
+    "data_collection": {
+      "enabled": false,
+      "forbidden_fields": [
+        "national_id",
+        "bank_account",
+        "card_number",
+        "date_of_birth",
+        "medical_record"
+      ],
+      "public_surface_rule": "No personal data may be requested or restated on a public comment thread, ever.",
+      "source": "Reply Library RL-16."
+    },
+    "products": {
+      "note": "Existence only. No price, no warranty, no availability and no superlative claim is asserted here — those live as DRAFT knowledge until Dental Hub confirms them in writing.",
+      "categories": [
+        "Dental Unit / كرسي أسنان",
+        "Autoclave / تعقيم",
+        "Compressor",
+        "Suction",
+        "X-Ray / Imaging",
+        "CAD-CAM / Scanner",
+        "Handpieces / تربينات",
+        "Curing / Endo أجهزة صغيرة",
+        "أثاث ومستلزمات عيادة",
+        "Full Clinic Package / تجهيز كامل",
+        "قطع غيار وصيانة"
+      ],
+      "source": "Taxonomy & Lists column H (Product_Category), 11 values."
+    },
+    "knowledge_gaps": {
+      "known_at_publication": [
+        "No approved price for any product.",
+        "No confirmed instalment terms: number of months, down payment, financing partner.",
+        "No confirmed warranty duration or coverage.",
+        "No confirmed delivery coverage, delivery times or installation/training terms.",
+        "No confirmed expiry date for the Fomos Autoclave discount seen in Ad Library, so it cannot be approved as an OFFER.",
+        "No confirmed business hours.",
+        "No confirmed named owner per queue."
+      ],
+      "note": "Every item here is a question the system will hand to a human until Dental Hub answers it. That is the designed behaviour, not a defect."
+    },
+    "evidence_log": {
+      "audit_window": "90 days to 2026-08-25, Africa/Cairo",
+      "sample_sizes": {
+        "posts_full_record": 5,
+        "posts_partial_record": 19,
+        "posts_total_reviewed": 24,
+        "comments_reviewed": 6,
+        "conversations_opened": 0,
+        "ads_reviewed": 1
+      },
+      "limitations": [
+        "No conversation was ever opened. The audit was read-only by rule, so there is no message-based finding in the workbook at all and every Messages Log / Lead Pipeline / SLA §B figure is an empty-range formula meaning 'not measured', never 'zero occurred'.",
+        "The 5 fully-recorded posts are all Reels published between 15 and 24 August 2026. Any statement about photos or carousels in the source workbook is inferential.",
+        "The 6 comments came from the 'needs attention' To-do list, not from the 3,939 comments Insights reports. The 100% unanswered rate has a denominator of 6 and must never be generalised.",
+        "Every previous-period figure in Monthly Summary is back-calculated from a percentage change; Meta never displayed those absolute values.",
+        "Content Score, Hook Strength, Offer Clarity, CTA Clarity and Purchase-Intent labels are reviewer judgement at n=5 and n=6.",
+        "Total posts in the 90-day window is unknown, so no coverage ratio may be reported."
+      ],
+      "source": "Audit Scope & Limitations (sheet 13) and Data Dictionary (sheet 12).",
+      "section_sources": {
+        "brand_voice": "Reply Library column G (ما يجب تجنبه), RL-01..RL-20; plus the audit's placeholder rule (Reply Library r2).",
+        "intent_taxonomy": "Taxonomy & Lists column A (Comment_Category), 17 values, r5:r21.",
+        "routing": "Reply Library column H (Owner) mapped onto Taxonomy & Lists column Q (Owner_Role).",
+        "authority_matrix": "Audit posture: no autonomous authority is granted anywhere in this pack.",
+        "escalation": "SLA Tracker §A r11 — complaint first reply within 1 business hour. Chosen as the handoff SLA because it is the tightest proposed target in the sheet."
+      },
+      "section_rationale": {
+        "escalation": "insufficient_knowledge_action is REQUEST_HUMAN_HANDOFF rather than ASK_CLARIFICATION: with almost no approved commercial knowledge, a clarifying question would stall the customer instead of reaching someone who can answer."
+      }
+    },
+    "evaluation_cases": {
+      "note": "Loaded from evaluation-cases.json. Inputs only — the 'Suggested Reply' column of the Comments Log is a never-sent draft and is not an expected output.",
+      "count": 8
+    }
+  }
+}

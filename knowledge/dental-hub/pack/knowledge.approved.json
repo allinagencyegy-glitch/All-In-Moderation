@@ -1,0 +1,86 @@
+{
+  "note": "APPROVED knowledge for Dental Hub. Deliberately small. An entry belongs here only if it is (a) directly evidenced in the audit workbook with a cited cell, (b) graded 'بيانات مؤكدة' (confirmed data), and (c) free of any commercial term — price, discount, warranty, instalment, delivery date — that Dental Hub has not confirmed in writing. Everything else is in knowledge.draft.json and is invisible to the model.",
+  "locale": "ar",
+  "entries": [
+    {
+      "key": "contact-whatsapp",
+      "kind": "FAQ",
+      "title": "قناة التواصل المعتمدة — واتساب",
+      "body": "رقم الواتساب المعلن على صفحة Dental Hub هو 01111772865. ده الرقم الرسمي للتواصل والاستفسار عن المنتجات وطلب عرض سعر.",
+      "tags": [
+        "واتساب",
+        "whatsapp",
+        "رقم",
+        "تواصل",
+        "اتصال",
+        "تليفون",
+        "موبايل",
+        "contact",
+        "phone"
+      ],
+      "intentCodes": [
+        "CONTACT_REQUEST",
+        "PRICE_INQUIRY",
+        "PRODUCT_INQUIRY",
+        "SPEC_INQUIRY",
+        "INSTALMENT_INQUIRY",
+        "WARRANTY_INQUIRY",
+        "MAINTENANCE_INQUIRY",
+        "DELIVERY_INSTALL_INQUIRY",
+        "HIGH_PURCHASE_INTENT",
+        "MEDIUM_PURCHASE_INTENT"
+      ],
+      "dataConfidence": "بيانات مؤكدة",
+      "sourceCells": "Reply Library r2; the number appears in RL-01, RL-03, RL-04, RL-19 and in the Comments Log suggested replies.",
+      "evidence": "Published by Dental Hub on the Facebook page itself. The audit states explicitly that the number used in the reply drafts is the WhatsApp number advertised on the page — it was not supplied by the audit and not invented."
+    },
+    {
+      "key": "product-roson-r2-pro",
+      "kind": "PRODUCT",
+      "title": "يونت Roson R2 Pro",
+      "body": "Dental Hub بتوفّر يونت أسنان موديل Roson R2 Pro. للمواصفات الكاملة والسعر والتوفر، التواصل على الواتساب.",
+      "productRef": "roson-r2-pro",
+      "tags": ["roson", "r2", "pro", "يونت", "كرسي", "كرسي أسنان", "dental unit", "unit", "وحدة"],
+      "intentCodes": [
+        "PRODUCT_INQUIRY",
+        "SPEC_INQUIRY",
+        "PRICE_INQUIRY",
+        "MEDIUM_PURCHASE_INTENT",
+        "HIGH_PURCHASE_INTENT"
+      ],
+      "dataConfidence": "بيانات مؤكدة",
+      "sourceCells": "Content Performance — the client's own post caption naming the model.",
+      "evidence": "Existence of the product line only. The caption's own claims — 'الوكيل الحصري والمعتمد' and 'الأكثر مبيعًا في مصر' — are deliberately NOT carried into this entry: they are the client's marketing assertions, not audit findings, and exclusive-agency and best-selling claims are substantiable statements. They are held in knowledge.draft.json."
+    },
+    {
+      "key": "product-fomos-autoclave",
+      "kind": "PRODUCT",
+      "title": "جهاز تعقيم Fomos Autoclave",
+      "body": "Dental Hub بتوفّر جهاز تعقيم Fomos Autoclave. للمواصفات الكاملة والسعر والتوفر، التواصل على الواتساب.",
+      "productRef": "fomos-autoclave",
+      "tags": ["fomos", "autoclave", "أوتوكلاف", "تعقيم", "معقم", "sterilizer", "sterilisation"],
+      "intentCodes": [
+        "PRODUCT_INQUIRY",
+        "SPEC_INQUIRY",
+        "PRICE_INQUIRY",
+        "MEDIUM_PURCHASE_INTENT",
+        "HIGH_PURCHASE_INTENT"
+      ],
+      "dataConfidence": "بيانات مؤكدة",
+      "sourceCells": "Issues & Complaints §B — one active ad in Meta Ad Library since 2026-08-11.",
+      "evidence": "Existence of the product line only. The '20 ألف خصم' seen in the ad creative is NOT included: an OFFER with no end date cannot be approved, and the database constraint knowledge_commercial_requires_expiry would refuse it. It is held in knowledge.draft.json until Dental Hub states the expiry."
+    },
+    {
+      "key": "product-full-clinic-package",
+      "kind": "PRODUCT",
+      "title": "باكدچ تجهيز عيادة كاملة",
+      "body": "Dental Hub بتقدّم خدمة تجهيز عيادة كاملة. تفاصيل الباكدچ والأسعار بتختلف حسب عدد الكراسي ومساحة العيادة — التواصل على الواتساب لتحديد المناسب.",
+      "productRef": "full-clinic-package",
+      "tags": ["باكدچ", "باكدج", "package", "تجهيز", "عيادة", "clinic", "كاملة", "تجهيزات"],
+      "intentCodes": ["PRODUCT_INQUIRY", "HIGH_PURCHASE_INTENT", "PRICE_INQUIRY"],
+      "dataConfidence": "بيانات مؤكدة",
+      "sourceCells": "Content Performance — the clinic-package post, highest comment rate in the fully-recorded sample; Product Demand evidence column.",
+      "evidence": "Existence of the service only. The audit's own reply draft RL-08 quotes a price range from '[سعر]' to '[سعر]' — both placeholders. No price band is asserted here."
+    }
+  ]
+}
