@@ -14,6 +14,7 @@ import type {
   TraceId,
 } from '../../platform/ids.ts';
 import { ID_PREFIX } from '../../platform/ids.ts';
+import { tokenize } from '../../platform/text/normalize-arabic.ts';
 import type { TransactionRunner } from '../../operations/transaction.ts';
 import type { JobQueue } from '../../operations/jobs/queue.ts';
 import type { AuditLog } from '../../operations/audit.ts';
@@ -25,8 +26,8 @@ import type { KnowledgeGate } from '../../knowledge/application/knowledge-gate.t
 import type { KnowledgeCandidateSet } from '../../knowledge/application/knowledge-gate.ts';
 import type { AccountPackRepository, KnowledgeGapRepository } from '../../knowledge/ports.ts';
 import { gateAction, fallbackActionFor } from '../../policy/action-gate.ts';
-import type { AuthorizedAction } from '../../policy/action-gate.ts';
-import { ACTION_TYPES } from '../../policy/actions.ts';
+import type { ActionGateInput, AuthorizedAction } from '../../policy/action-gate.ts';
+import { ACTION_RISK, ACTION_TYPES } from '../../policy/actions.ts';
 import type { ActionType } from '../../policy/actions.ts';
 import type { Conversation } from '../domain/conversation.ts';
 import {
@@ -277,6 +278,8 @@ export function createRunModeratorService(deps: RunModeratorDeps): RunModeratorS
         matrix,
         runId: run.id,
         traceId,
+        packVersionId: activePack.id,
+        inputWatermark: run.inputWatermark,
       });
 
       // --- staleness guard ----------------------------------------------------------------------
@@ -362,6 +365,7 @@ export function createRunModeratorService(deps: RunModeratorDeps): RunModeratorS
       try {
         return await deps.transactions.run(async () => {
           let outboundActionId: OutboundActionId | null = null;
+          let awaitingReview = false;
 
           if (evaluated.authorization) {
             // Two independent brakes, and either one alone is sufficient.
@@ -392,6 +396,7 @@ export function createRunModeratorService(deps: RunModeratorDeps): RunModeratorS
             });
             await deps.outbound.save(scope, action);
             outboundActionId = action.id;
+            awaitingReview = action.deliveryMode === 'SUGGESTED';
           }
 
           let committed = fresh;
@@ -443,7 +448,14 @@ export function createRunModeratorService(deps: RunModeratorDeps): RunModeratorS
             {
               ...committed,
               lastProcessedInboundSeq: run.inputWatermark,
-              engagement: outboundActionId !== null ? 'AWAITING_CUSTOMER' : committed.engagement,
+              // A suggested draft has reached nobody. Marking the conversation AWAITING_CUSTOMER
+              // would tell an operator the ball is in the customer's court when it is in fact
+              // sitting in the review queue — the exact misreading this account is being onboarded
+              // to fix. It stays AWAITING_MODERATOR until a person acts.
+              engagement:
+                outboundActionId !== null && !awaitingReview
+                  ? 'AWAITING_CUSTOMER'
+                  : committed.engagement,
             },
             // `committed` carries a bumped version when this run raised its own handoff; the row on
             // disk still holds the version the guard observed.
@@ -603,6 +615,9 @@ async function evaluateProposal(input: {
   matrix: ReturnType<typeof resolveAuthorityMatrix>;
   runId: ModeratorRunId;
   traceId: TraceId;
+  /** Snapshotted onto a suggested draft so a reviewer sees the configuration that produced it. */
+  packVersionId: string;
+  inputWatermark: number;
 }): Promise<EvaluatedProposal> {
   const { deps, scope, conversation, proposal, candidates, taxonomy, escalation, matrix } = input;
   const now = deps.clock.now();
@@ -661,22 +676,39 @@ async function evaluateProposal(input: {
 
   const downgraded = intended !== proposal.proposed_action;
   const payload = buildPayload(intended, proposal, reason);
+  const hasReplyText = (candidate: OutboundActionPayload): boolean =>
+    typeof candidate.text === 'string' && candidate.text.length > 0;
 
-  const gate = gateAction({
-    conversationId: conversation.id,
-    surface: conversation.surface,
-    ownership: conversation.ownership,
-    lifecycle: conversation.lifecycle,
-    ownershipVersion: conversation.ownershipVersion,
-    accountCanActAutonomously: input.account.canAct,
-    action: intended,
-    requestedDeliveryMode: 'AUTONOMOUS',
-    matrix,
-    knowledgeVerified: verification.verified,
-    citationCount: proposal.knowledge_refs.length,
-    hasReplyText: typeof payload.text === 'string' && payload.text.length > 0,
-    now,
-  });
+  const gateFor = (
+    action: ActionType,
+    mode: ActionGateInput['requestedDeliveryMode'],
+    candidate: OutboundActionPayload,
+    verified: boolean,
+    citations: number,
+  ) =>
+    gateAction({
+      conversationId: conversation.id,
+      surface: conversation.surface,
+      ownership: conversation.ownership,
+      lifecycle: conversation.lifecycle,
+      ownershipVersion: conversation.ownershipVersion,
+      accountCanActAutonomously: input.account.canAct,
+      action,
+      requestedDeliveryMode: mode,
+      matrix,
+      knowledgeVerified: verified,
+      citationCount: citations,
+      hasReplyText: hasReplyText(candidate),
+      now,
+    });
+
+  const gate = gateFor(
+    intended,
+    'AUTONOMOUS',
+    payload,
+    verification.verified,
+    proposal.knowledge_refs.length,
+  );
 
   if (gate.outcome === 'ALLOWED') {
     return {
@@ -691,25 +723,58 @@ async function evaluateProposal(input: {
     };
   }
 
+  // The account's matrix says a person must approve this action. That is emphatically *not* the
+  // same as "discard it" — which is what this branch used to do, dropping the drafted reply on
+  // the floor and handing the reviewer a bare handoff reason. Ask again for the weaker thing:
+  // permission to *suggest*.
+  //
+  // Everything that made the autonomous request unsafe still applies, because `gateAction`
+  // re-runs every check. A suggestion with no citation is still refused. What changes is only
+  // that a matrix effect of REQUIRE_APPROVAL now resolves to a suppressed draft with the text
+  // attached, waiting for the named human it was always meant for.
+  if (gate.outcome === 'REQUIRES_APPROVAL') {
+    const suggest = gateFor(
+      intended,
+      'SUGGESTED',
+      payload,
+      verification.verified,
+      proposal.knowledge_refs.length,
+    );
+    if (suggest.outcome === 'ALLOWED') {
+      return {
+        finalAction: intended,
+        policyOutcome: 'REQUIRES_APPROVAL',
+        policyReason: gate.reason,
+        authorization: suggest.authorization,
+        payload: {
+          ...payload,
+          review: {
+            intentCode: proposal.intent.code,
+            intentConfidence: proposal.intent.confidence,
+            overallConfidence: proposal.confidence,
+            risk: ACTION_RISK[intended],
+            proposedAction: proposal.proposed_action,
+            policyReason: gate.reason,
+            knowledgeRefs: verification.usedIds,
+            packVersionId: input.packVersionId,
+            promptVersion: MODERATOR_PROMPT_VERSION,
+            inputWatermark: input.inputWatermark,
+            moderatorRunId: input.runId,
+          },
+        },
+        knowledgeRefsUsed: verification.usedIds,
+        handoffReason: reason,
+        extraEvents,
+      };
+    }
+    // A suggestion was refused too — the grounding rules, not the matrix. Fall through.
+  }
+
   // A denial must never mean "do nothing and say nothing" while a customer waits. Fall back to
   // asking a human, and gate *that* too — the fallback is not privileged.
   const fallback = fallbackActionFor(intended);
   const fallbackPayload = buildPayload(fallback, proposal, gate.reason);
-  const fallbackGate = gateAction({
-    conversationId: conversation.id,
-    surface: conversation.surface,
-    ownership: conversation.ownership,
-    lifecycle: conversation.lifecycle,
-    ownershipVersion: conversation.ownershipVersion,
-    accountCanActAutonomously: input.account.canAct,
-    action: fallback,
-    requestedDeliveryMode: 'AUTONOMOUS',
-    matrix,
-    knowledgeVerified: true,
-    citationCount: 0,
-    hasReplyText: typeof fallbackPayload.text === 'string' && fallbackPayload.text.length > 0,
-    now,
-  });
+  const fallbackGate = gateFor(fallback, 'AUTONOMOUS', fallbackPayload, true, 0);
 
   return {
     finalAction: fallbackGate.outcome === 'ALLOWED' ? fallback : 'NO_ACTION',
@@ -841,16 +906,20 @@ function normaliseQuestionShape(
 /**
  * Deterministic retrieval keys from message text (ADR-010, open decision D1).
  *
- * Lowercased word stems above a length threshold. Crude, and deliberately so: an unevaluated
+ * Normalised word stems above a length threshold. Crude, and deliberately so: an unevaluated
  * clever retriever that silently returns the wrong entry is worse than a simple one whose misses
  * are visible as knowledge gaps.
+ *
+ * Normalisation is not a refinement of that crudeness, it is what makes it work at all. Arabic
+ * tokenises correctly on codepoints, so this looked fine before — while `الكرسي` failed to match
+ * a `كرسي` tag and the miss surfaced as a handoff rather than as a bug. Both sides of the
+ * comparison now go through the same function (`platform/text/normalize-arabic.ts`): entry tags
+ * at import, customer text here.
  */
 function deriveRetrievalTags(texts: readonly string[]): string[] {
   const tags = new Set<string>();
   for (const text of texts) {
-    for (const word of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
-      if (word.length >= 3) tags.add(word);
-    }
+    for (const token of tokenize(text)) tags.add(token);
   }
   return [...tags].slice(0, 50);
 }

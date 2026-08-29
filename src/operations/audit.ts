@@ -12,6 +12,9 @@ export const AUDIT_ACTIONS = [
   'conversation.ownership_changed',
   'conversation.human_message_sent',
   'moderator.action_denied',
+  // A named person accepted, edited, rejected or escalated a suggested reply (ADR-011). The one
+  // audit action in this list whose actor is always HUMAN and never SYSTEM.
+  'outbound_action.reviewed',
   'moderator.run_skipped',
   'moderator.run_superseded',
   'knowledge.entry_approved',

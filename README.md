@@ -1,8 +1,10 @@
 # All In Moderation
 
-A multi-client, 24/7 AI moderation platform for social messaging. Three phases are complete: the
+A multi-client, 24/7 AI moderation platform for social messaging. Four phases are complete: the
 domain model and its safety mechanisms (Phase 00), those mechanisms proven against real PostgreSQL
-(Phase 01), and the continuously-running application that hosts them (Phase 02A).
+(Phase 01), the continuously-running application that hosts them (Phase 02A), real Meta inbound
+transport in receive-only mode (Phase 02B), and a first client's knowledge, a real language model
+and human review of every drafted reply (Phase 02C).
 
 The whole thing exists to make one claim defensible before any real traffic exists:
 
@@ -11,23 +13,28 @@ The whole thing exists to make one claim defensible before any real traffic exis
 
 Everything here is in service of that sentence.
 
-**Still no network.** There is no Meta transport, no real language model and no outbound delivery.
-`OUTBOUND_MODE=LIVE` is refused at boot, and the webhook endpoint is exercised with locally signed
-payloads.
+**One network call, and it is not a reply.** A real language model can now be reached, through
+exactly one allowlisted file, to exactly one host (ADR-012). There is still **no outbound delivery
+of any kind**: no Meta API host in `src/`, no access token, no dispatcher. `OUTBOUND_MODE=LIVE` is
+refused at boot. The AI drafts; a named person approves; that person sends the text themselves from
+Meta Inbox.
 
 ## What is built, and what is not
 
-| Built and proven                                                        | Deliberately absent                                                        |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Domain model, state machines, invariants                                | Live Meta transport — outbound is `SIMULATE` only                          |
-| Durable job queue on PostgreSQL: leases, partition exclusivity, DLQ     | Real LLM provider — a deterministic mock stands in                         |
-| Tenancy: branded scope tokens, per-row assertions, enforced RLS         | Operator UI                                                                |
-| Knowledge Gate, Account Packs, policy/authority matrix                  | A real destination for relayed domain events                               |
-| Ownership model with compare-and-swap concurrency control               | `event_deliveries` per-subscription fan-out (schema only)                  |
-| **A process that runs**: poll loops, timers, graceful shutdown          | Outbound delivery of any kind                                              |
-| **An HTTP webhook endpoint**: raw-body signatures, size cap, fast `200` | Any client's business rules — those live in Account Packs, never in `src/` |
-| **The outbox relay**, on its own least-privileged database role         |                                                                            |
-| **Health endpoints**: process, database, queue depth, DLQ, inbound lag  |                                                                            |
+| Built and proven                                                          | Deliberately absent                                                        |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Domain model, state machines, invariants                                  | Outbound delivery of any kind — the AI drafts, a person sends              |
+| Durable job queue on PostgreSQL: leases, partition exclusivity, DLQ       | Autonomous replies — every customer-visible action needs a named approver  |
+| Tenancy: branded scope tokens, per-row assertions, enforced RLS           | An operator UI, and any notification that a draft is waiting               |
+| Knowledge Gate, Account Packs, policy/authority matrix                    | A CRM — `CREATE_LEAD_CANDIDATE` and `CAPTURE_FIELD` are denied             |
+| Ownership model with compare-and-swap concurrency control                 | A real destination for relayed domain events                               |
+| **A process that runs**: poll loops, timers, graceful shutdown            | `event_deliveries` per-subscription fan-out (schema only)                  |
+| **An HTTP webhook endpoint**: raw-body signatures, size cap, fast `200`   | Any client's business rules — those live in Account Packs, never in `src/` |
+| **The outbox relay**, on its own least-privileged database role           | Embeddings or vector retrieval — deterministic tag matching, loudly        |
+| **Health endpoints**: process, database, queue depth, DLQ, inbound lag    |                                                                            |
+| **A real LLM adapter** behind one allowlisted egress; mock is the default |                                                                            |
+| **Human review**: suggested drafts, approve/edit/reject/escalate, audited |                                                                            |
+| **Arabic retrieval normalisation**, applied identically on both sides     |                                                                            |
 
 ## Quick start
 
@@ -178,12 +185,15 @@ runtime — client business content belongs in an Account Pack (ADR-010).
 | [docs/DOMAIN-MODEL.md](docs/DOMAIN-MODEL.md)                                                 | Entities, relationships, invariants                           |
 | [docs/STATE-MACHINES.md](docs/STATE-MACHINES.md)                                             | Every lifecycle and its legal transitions                     |
 | [docs/FAILURE-MODE-REGISTER.md](docs/FAILURE-MODE-REGISTER.md)                               | The F-numbers referenced throughout the code                  |
-| [docs/adr/](docs/adr/)                                                                       | The ten decisions, their options, and revisit triggers        |
+| [docs/adr/](docs/adr/)                                                                       | The twelve decisions, their options, and revisit triggers     |
 | [docs/HANDOFF-PHASE-00.md](docs/HANDOFF-PHASE-00.md)                                         | The foundation, proven against an in-memory store             |
 | [docs/HANDOFF-PHASE-01.md](docs/HANDOFF-PHASE-01.md)                                         | The PostgreSQL proof, and the six defects it found            |
 | [docs/HANDOFF-PHASE-02A.md](docs/HANDOFF-PHASE-02A.md)                                       | The runtime shell: what runs, what is still simulated         |
 | [docs/HANDOFF-PHASE-02B.md](docs/HANDOFF-PHASE-02B.md)                                       | Meta receive-only transport: what is proved, and how          |
 | [docs/HANDOFF-PHASE-02B1.md](docs/HANDOFF-PHASE-02B1.md)                                     | The deployment bootstrap, and the defect it closed            |
+| [docs/HANDOFF-PHASE-02C.md](docs/HANDOFF-PHASE-02C.md)                                       | Client knowledge, the real model, and human review            |
+| [docs/KNOWLEDGE-APPROVAL-PROCEDURE.md](docs/KNOWLEDGE-APPROVAL-PROCEDURE.md)                 | When a fact may become one the AI is allowed to state         |
+| [docs/CLIENT-DATA-HANDLING.md](docs/CLIENT-DATA-HANDLING.md)                                 | Where a client's material may live, and where it may not      |
 | [docs/DEPLOYMENT-BOOTSTRAP.md](docs/DEPLOYMENT-BOOTSTRAP.md)                                 | Empty cluster to running service, and what privilege it needs |
 | [docs/META-RECEIVE-ONLY-OPERATOR-CHECKLIST.md](docs/META-RECEIVE-ONLY-OPERATOR-CHECKLIST.md) | Attaching a real Meta connection, step by step                |
 
@@ -219,3 +229,19 @@ server in CI. Attaching a real account is operator work:
 [docs/META-RECEIVE-ONLY-OPERATOR-CHECKLIST.md](docs/META-RECEIVE-ONLY-OPERATOR-CHECKLIST.md) is the
 step-by-step procedure, and [docs/HANDOFF-PHASE-02B.md](docs/HANDOFF-PHASE-02B.md) is the full
 account of what is proved, what is not, and what has to be true before sending is possible.
+
+**Phase 02C connected a first client and a real model, and kept the human in the loop.** A
+versioned Account Pack and its knowledge are published from files; only explicitly verified,
+explicitly approved facts are ever shown to the model, and everything else is tracked as a draft
+the client still has to confirm. `REQUIRE_APPROVAL` now produces a suggested reply with its
+evidence rather than discarding it, and a named person approves, edits, rejects or escalates it
+through `src/runtime/cli/review.ts`.
+
+**Approving is not sending.** An accepted draft reaches `APPROVED_FOR_MANUAL_SEND`, which is
+terminal — a database CHECK confines that state to suggestions, and there is no dispatcher to route
+it to. The hard invariant behind the knowledge model is unchanged and now asserted against the real
+client pack: **no approved knowledge means no factual invention**. A price nobody confirmed is a
+question for a person, not a number for the model.
+
+Read [docs/HANDOFF-PHASE-02C.md](docs/HANDOFF-PHASE-02C.md) for what is still simulated, what is
+still manual, and what has to be true before the first live inbound-message trial.

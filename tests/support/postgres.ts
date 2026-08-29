@@ -386,6 +386,8 @@ export const ALL_TABLES = [
   'account_pack_versions',
   'lead_candidates',
   'handoffs',
+  // Before `outbound_actions`: it points at them, and TRUNCATE runs children first.
+  'outbound_action_reviews',
   'outbound_actions',
   'moderator_runs',
   'messages',

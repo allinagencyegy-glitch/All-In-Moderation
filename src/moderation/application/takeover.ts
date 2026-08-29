@@ -119,10 +119,15 @@ export function createTakeoverService(deps: TakeoverDeps): TakeoverService {
     );
     if (!applied) throw new ConcurrencyConflictError('conversation', expectedVersion);
 
-    // Cancel anything the AI decided before the takeover but has not yet delivered.
+    // Cancel anything the AI decided before the takeover but has not yet reached a customer.
+    //
+    // `SUPPRESSED` belongs here as much as `PENDING_DISPATCH` does. A suggested draft is an
+    // answer to a conversation as it stood before a person picked it up; leaving it in the review
+    // queue means someone can approve stale text hours later and send it by hand, which is the
+    // same failure as the AI talking over a human, only slower and with a name attached to it.
     const pending = await deps.outbound.listByConversation(scope, conversation.id);
     for (const action of pending) {
-      if (action.state !== 'PENDING_DISPATCH') continue;
+      if (action.state !== 'PENDING_DISPATCH' && action.state !== 'SUPPRESSED') continue;
       await deps.outbound.save(
         scope,
         transitionOutboundAction(action, 'CANCELLED', { cancelledReason: 'HUMAN_TOOK_OVER' }),

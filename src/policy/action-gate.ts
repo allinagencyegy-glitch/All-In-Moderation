@@ -125,9 +125,21 @@ export function gateAction(input: ActionGateInput): ActionGateResult {
   if (matrix.effect === 'DENY') {
     return { outcome: 'DENIED', reason: matrix.reason };
   }
-  if (matrix.effect === 'REQUIRE_APPROVAL') {
+  if (matrix.effect === 'REQUIRE_APPROVAL' && input.requestedDeliveryMode !== 'SUGGESTED') {
+    // The caller asked to *act*. The matrix says a person must decide first, so this is not
+    // authorised — and the caller's recourse is to come back asking to *suggest*, which is a
+    // materially weaker request and is handled below.
     return { outcome: 'REQUIRES_APPROVAL', reason: matrix.reason };
   }
+
+  // A SUGGESTED request reaches here under either ALLOW or REQUIRE_APPROVAL, and that is the
+  // point: proposing text for a human to read is strictly less than sending it. Every check
+  // above still had to pass — a suggestion that cites nothing is still refused by rule 5, which
+  // is what keeps "no approved knowledge" from becoming "a plausible-looking draft".
+  //
+  // The resulting token carries `deliveryMode: 'SUGGESTED'`, and `createOutboundAction` puts a
+  // suggestion in SUPPRESSED rather than in the dispatch queue. There is no configuration that
+  // turns a suggestion into a send, because there is nothing to send with.
 
   const authorization: AuthorizedAction = {
     action,

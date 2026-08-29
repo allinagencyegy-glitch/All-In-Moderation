@@ -58,6 +58,7 @@ const CONFIG: RuntimeConfig = {
     timeoutMs: 5_000,
     temperature: 0.2,
     maxOutputTokens: 1_024,
+    structuredOutput: true,
   },
   ingest: { maxBodyBytes: 1_000_000 },
 };

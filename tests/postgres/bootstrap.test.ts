@@ -60,7 +60,7 @@ import {
  *
  *   CREATE DATABASE (operator, privileged, cannot be transactional)
  *     -> bootstrap: privilege roles, login identities, memberships, pgcrypto, schema grants
- *     -> migrate 0001..0008 as app_migrator_login assuming app_migrator
+ *     -> migrate every migration on disk as app_migrator_login assuming app_migrator
  *     -> runtime / worker / relay logins connect
  *     -> each does exactly its own work, and nothing else
  *     -> the application boots and takes a webhook off a real socket
@@ -385,7 +385,7 @@ describe('postgres deployment bootstrap', { skip: available ? false : 'no Postgr
   // 2. Migration, under the migrator identity
   // ----------------------------------------------------------------------------------------------
 
-  it('migrates 0001 through 0008 as app_migrator_login assuming app_migrator', async () => {
+  it('migrates every migration on disk as app_migrator_login assuming app_migrator', async () => {
     const db = createPostgresDatabase({
       config: {
         ...DEFAULT_POSTGRES_CONFIG,
@@ -417,7 +417,16 @@ describe('postgres deployment bootstrap', { skip: available ? false : 'no Postgr
       );
       return result.rows.map((row) => row.version);
     });
-    assert.deepEqual(versions, ['0001', '0002', '0003', '0004', '0005', '0006', '0007', '0008']);
+    // Derived from the directory rather than hard-coded, so adding a migration cannot make this
+    // test stale — and the contiguity check below is what a hard-coded list was really buying:
+    // it still catches a deleted, renumbered or skipped migration.
+    const onDisk = loadMigrations(MIGRATIONS_DIR).map((file) => file.filename.slice(0, 4));
+    assert.deepEqual(versions, onDisk);
+    assert.deepEqual(
+      versions,
+      versions.map((_version, index) => String(index + 1).padStart(4, '0')),
+      'migrations must be contiguous from 0001: a gap means one was deleted or misnumbered',
+    );
   });
 
   it('leaves every object owned by app_migrator, not by the identity that connected', async () => {

@@ -26,6 +26,7 @@ import type { CoreContainer } from '../container.ts';
 import { loadConfig } from '../config.ts';
 import { emit, fail, openCliContext, parseArgs } from './context.ts';
 import { loadAllFixtures, loadManifest } from './fixtures.ts';
+import { LIVE_OUTBOUND_STATES } from '../../moderation/domain/outbound-action.ts';
 
 /**
  * `shadow-acceptance` — the proof that receive-only is real (objective 14).
@@ -140,6 +141,8 @@ export interface SelfTestReport {
   readonly conversationsTouched: number;
   readonly outboundActions: number;
   readonly liveOutboundActions: number;
+  /** Drafts waiting for a human. Not live, and reported so the number is visible rather than implied. */
+  readonly suggestedOutboundActions: number;
   readonly byClassification: Readonly<Record<string, number>>;
   readonly transport: unknown;
   readonly failures: readonly string[];
@@ -333,11 +336,26 @@ export async function selfTest(): Promise<SelfTestReport> {
   // --- the load-bearing assertion ----------------------------------------------------------------
   let outboundActions = 0;
   let liveOutboundActions = 0;
+  let suggestedOutboundActions = 0;
   for (const action of container.db.tables.outbound.values()) {
     outboundActions += 1;
-    if (action.deliveryMode !== 'SIMULATED') {
+    // Two independent conditions, and either one alone makes an action "live".
+    //
+    // The mode check is the original one, narrowed from "not SIMULATED" to "AUTONOMOUS": Phase
+    // 02C introduced SUGGESTED, which means the *opposite* of a send — a draft deliberately kept
+    // out of the dispatch queue until a named person accepts it and sends it themselves.
+    //
+    // The state check is new, and it is the stronger of the two. It asserts against the state
+    // machine rather than against a label, so an action that somehow acquired a dispatch state
+    // while still calling itself SUGGESTED is caught here even though its mode looks safe.
+    const liveMode = action.deliveryMode === 'AUTONOMOUS';
+    const liveState = LIVE_OUTBOUND_STATES.has(action.state);
+    if (action.deliveryMode === 'SUGGESTED') suggestedOutboundActions += 1;
+    if (liveMode || liveState) {
       liveOutboundActions += 1;
-      failures.push(`outbound action ${action.id} is ${action.deliveryMode}, not SIMULATED`);
+      failures.push(
+        `outbound action ${action.id} is live: mode ${action.deliveryMode}, state ${action.state}`,
+      );
     }
   }
 
@@ -367,6 +385,7 @@ export async function selfTest(): Promise<SelfTestReport> {
     conversationsTouched: conversations.size,
     outboundActions,
     liveOutboundActions,
+    suggestedOutboundActions,
     byClassification,
     transport: container.metrics.snapshot(),
     failures,

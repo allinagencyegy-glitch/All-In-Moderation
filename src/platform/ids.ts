@@ -23,6 +23,7 @@ export type ConversationId = Brand<string, 'ConversationId'>;
 export type MessageId = Brand<string, 'MessageId'>;
 export type ModeratorRunId = Brand<string, 'ModeratorRunId'>;
 export type OutboundActionId = Brand<string, 'OutboundActionId'>;
+export type OutboundActionReviewId = Brand<string, 'OutboundActionReviewId'>;
 export type HandoffId = Brand<string, 'HandoffId'>;
 export type LeadCandidateId = Brand<string, 'LeadCandidateId'>;
 export type KnowledgeEntryId = Brand<string, 'KnowledgeEntryId'>;
@@ -129,6 +130,7 @@ export const ID_PREFIX = {
   message: 'msg',
   moderatorRun: 'run',
   outboundAction: 'oba',
+  outboundActionReview: 'rvw',
   handoff: 'hdf',
   leadCandidate: 'lcd',
   knowledgeEntry: 'kne',

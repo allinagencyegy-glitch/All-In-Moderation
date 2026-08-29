@@ -1,0 +1,146 @@
+{
+  "note": "DRAFT knowledge. NONE of this is visible to the model: the Knowledge Gate filters to status=APPROVED before retrieval, so a DRAFT entry cannot be retrieved, cannot be cited, and cannot be verified. Each entry records what Dental Hub must confirm in writing before it may be promoted. Promotion is a deliberate human act through `knowledge import --approve`, and for a PRICE or OFFER the database will refuse it without a valid_until.",
+  "locale": "ar",
+  "entries": [
+    {
+      "key": "offer-fomos-discount",
+      "kind": "OFFER",
+      "title": "خصم على Fomos Autoclave",
+      "body": "إعلان نشط في Meta Ad Library منذ 2026-08-11 يذكر «خصم 20 الف» على جهاز Fomos Autoclave.",
+      "productRef": "fomos-autoclave",
+      "price": { "amount": "20000.00", "currency": "EGP" },
+      "tags": ["fomos", "autoclave", "خصم", "عرض", "تخفيض"],
+      "intentCodes": ["PRICE_INQUIRY", "PRODUCT_INQUIRY"],
+      "dataConfidence": "بيانات مؤكدة",
+      "sourceCells": "Issues & Complaints §B — Meta Ad Library, one active ad, start date 2026-08-11.",
+      "evidence": "The ad is real and the discount figure is quoted from its creative. The ad carries NO end date.",
+      "blockedBy": "knowledge_commercial_requires_expiry — an OFFER cannot be APPROVED without valid_until. Dental Hub must state the expiry date. Do not work around this constraint.",
+      "requiresConfirmation": [
+        "Offer end date",
+        "Which model/configuration the discount applies to",
+        "Whether the discount is off list price or a bundle"
+      ]
+    },
+    {
+      "key": "instalments",
+      "kind": "POLICY",
+      "title": "التقسيط والتمويل",
+      "body": "PLACEHOLDER — RL-04 opens with «أيوه فيه» (yes, instalments are available) and then leaves [عدد] شهور, مقدم [النسبة]%, [جهة التمويل] and [القسط] as placeholders.",
+      "tags": ["تقسيط", "تمويل", "اقساط", "مقدم"],
+      "intentCodes": ["INSTALMENT_INQUIRY"],
+      "dataConfidence": "بيانات غير متاحة",
+      "sourceCells": "Reply Library RL-04.",
+      "evidence": "The audit found no evidence in the account that instalments are offered at all. The affirmative opening is the draft author's assumption, not a finding.",
+      "requiresConfirmation": [
+        "Whether instalments are offered at all",
+        "Financing partner",
+        "Number of months",
+        "Down-payment percentage",
+        "Whether the terms differ by product"
+      ]
+    },
+    {
+      "key": "warranty",
+      "kind": "WARRANTY",
+      "title": "الضمان",
+      "body": "PLACEHOLDER — RL-05 states «الضمان [المدة] على [ما يشمله]» plus «شامل الصيانة الدورية في السنة الأولى» and «قطع الغيار أصلية ومتوفرة».",
+      "tags": ["ضمان", "warranty", "كفالة"],
+      "intentCodes": ["WARRANTY_INQUIRY"],
+      "dataConfidence": "بيانات غير متاحة",
+      "sourceCells": "Reply Library RL-05.",
+      "evidence": "Duration and coverage are placeholders. The first-year maintenance claim and the genuine-spare-parts claim have no evidence in the audit.",
+      "requiresConfirmation": [
+        "Warranty duration per product line",
+        "What the warranty covers and excludes",
+        "Whether first-year periodic maintenance is included",
+        "Whether a written warranty certificate exists"
+      ]
+    },
+    {
+      "key": "maintenance-response",
+      "kind": "POLICY",
+      "title": "الصيانة وخدمة ما بعد البيع",
+      "body": "PLACEHOLDER — RL-06 promises a maintenance team moving «في خلال [المدة] من البلاغ» and optional annual maintenance contracts.",
+      "tags": ["صيانة", "maintenance", "عطل", "فني"],
+      "intentCodes": ["MAINTENANCE_INQUIRY"],
+      "dataConfidence": "بيانات غير متاحة",
+      "sourceCells": "Reply Library RL-06, RL-11.",
+      "evidence": "No response-time commitment is evidenced. RL-06's own 'avoid' column warns against promising unguaranteed appointments.",
+      "requiresConfirmation": [
+        "Maintenance response time, if any is committed",
+        "Whether annual maintenance contracts exist and on what terms",
+        "Named after-sales owner"
+      ]
+    },
+    {
+      "key": "delivery-installation",
+      "kind": "DELIVERY",
+      "title": "التوصيل والتركيب",
+      "body": "PLACEHOLDER — RL-07 asserts «بنوصل ونركّب في كل محافظات مصر» and «التركيب والتدريب على الجهاز مجانًا مع الشراء», with delivery time left as [المدة].",
+      "tags": ["توصيل", "تركيب", "شحن", "delivery", "installation", "تدريب"],
+      "intentCodes": ["DELIVERY_INSTALL_INQUIRY"],
+      "dataConfidence": "استنتاج تحليلي",
+      "sourceCells": "Reply Library RL-07.",
+      "evidence": "Nationwide coverage and free installation/training are commercial commitments with no supporting evidence anywhere in the audit.",
+      "requiresConfirmation": [
+        "Which governorates are actually served",
+        "Whether installation and training are genuinely free",
+        "Delivery lead times"
+      ]
+    },
+    {
+      "key": "claim-roson-exclusive-agency",
+      "kind": "CLAIM",
+      "title": "ادعاء الوكالة الحصرية لـ Roson",
+      "body": "The client's own post caption describes Dental Hub as «الوكيل الحصري والمعتمد» for Roson units in Egypt.",
+      "productRef": "roson-r2-pro",
+      "tags": ["roson", "وكيل", "حصري", "معتمد"],
+      "intentCodes": ["PRODUCT_INQUIRY"],
+      "dataConfidence": "بيانات مؤكدة",
+      "sourceCells": "Content Performance — post caption.",
+      "evidence": "It is confirmed that the CLIENT made this claim. It is not confirmed that the claim is true. Exclusive-agency status is a legally substantiable statement in Egypt and requires the distribution agreement before this system repeats it.",
+      "requiresConfirmation": [
+        "Written distribution/agency agreement",
+        "Territory and exclusivity scope",
+        "Current validity of the agreement"
+      ]
+    },
+    {
+      "key": "claim-roson-best-selling",
+      "kind": "CLAIM",
+      "title": "ادعاء الأكثر مبيعًا",
+      "body": "The client's own post caption describes the Roson R2 Pro as «الأكثر مبيعًا في مصر».",
+      "productRef": "roson-r2-pro",
+      "tags": ["roson", "الأكثر مبيعا", "الاكثر مبيعا"],
+      "intentCodes": ["PRODUCT_INQUIRY"],
+      "dataConfidence": "استنتاج تحليلي",
+      "sourceCells": "Content Performance — post caption.",
+      "evidence": "A market-share superlative with no cited source. Repeating it exposes the client to a substantiation challenge.",
+      "requiresConfirmation": ["Independent market data supporting the superlative"]
+    },
+    {
+      "key": "business-hours",
+      "kind": "HOURS",
+      "title": "ساعات العمل",
+      "body": "PROPOSED — 9:00–18:00 السبت–الخميس، وواتساب 9:00–20:00 يوميًا.",
+      "tags": ["مواعيد", "ساعات", "شغل", "hours", "مفتوح"],
+      "intentCodes": ["CONTACT_REQUEST"],
+      "dataConfidence": "بيانات غير متاحة",
+      "sourceCells": "SLA Tracker §A column D.",
+      "evidence": "These hours are the audit's proposal for SLA measurement windows, not Dental Hub's published hours. No opening hours were found on the page.",
+      "requiresConfirmation": ["Actual published business hours"]
+    },
+    {
+      "key": "sla-response-commitments",
+      "kind": "POLICY",
+      "title": "التزامات زمن الرد",
+      "body": "PROPOSED — first reply within 1 business hour on DM, 2 hours on comments, 30 minutes on WhatsApp; quotation within 24 hours.",
+      "tags": ["رد", "زمن", "sla", "استجابة"],
+      "intentCodes": ["COMPLAINT"],
+      "dataConfidence": "بيانات غير متاحة",
+      "sourceCells": "SLA Tracker §A r6:r13.",
+      "evidence": "The sheet states plainly that Dental Hub has no documented SLA and no evidence of one was found. These are targets proposed by the audit. Stating them to a customer would create a commitment the business has not made.",
+      "requiresConfirmation": ["Whether management adopts these targets as commitments"]
+    }
+  ]
+}

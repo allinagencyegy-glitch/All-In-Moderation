@@ -11,6 +11,16 @@ import type { LogLevel } from '../platform/logger.ts';
 
 export type OutboundMode = 'SIMULATE' | 'LIVE';
 
+/**
+ * The providers this build can construct.
+ *
+ * A closed set, validated at boot. A typo in `LLM_PROVIDER` must not silently fall back to the
+ * mock and leave a deployment answering customers with canned test output — nor silently reach a
+ * paid API. Both directions of that mistake fail the process instead.
+ */
+export const LLM_PROVIDER_IDS = ['mock', 'anthropic'] as const;
+export type LlmProviderId = (typeof LLM_PROVIDER_IDS)[number];
+
 export interface RuntimeConfig {
   readonly nodeEnv: 'development' | 'test' | 'production';
   readonly role: 'web' | 'worker' | 'all';
@@ -55,12 +65,27 @@ export interface RuntimeConfig {
     readonly deadLetterCeiling: number;
   };
   readonly llm: {
-    readonly providerId: string;
+    /** `mock` or `anthropic`. Defaults to `mock`; an unknown value is refused at boot. */
+    readonly providerId: LlmProviderId;
     readonly reasonModel: string;
     readonly timeoutMs: number;
+    /**
+     * Retained because the `LlmRequest` port still carries it. Current models reject a sampling
+     * parameter outright, so the Anthropic adapter drops it — see `anthropic-provider.ts`.
+     */
     readonly temperature: number;
     readonly maxOutputTokens: number;
+    /** Send the JSON Schema as a vendor constraint. We re-validate regardless (ADR-007). */
+    readonly structuredOutput: boolean;
   };
+
+  /*
+   * Note what is absent: the model API key.
+   *
+   * It is read at the boot edge (`runtime/main.ts`, `runtime/cli/context.ts`) and handed to the
+   * composition root, never parked on this object. The header of this file promises that a config
+   * dump cannot leak a secret, and an API key must not become the first exception to it.
+   */
   readonly ingest: {
     readonly maxBodyBytes: number;
   };
@@ -147,11 +172,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig 
       deadLetterCeiling: asInt(env['HEALTH_DEAD_LETTER_CEILING'], 0),
     },
     llm: {
-      providerId: env['LLM_PROVIDER'] ?? 'mock',
+      providerId: asEnum(env['LLM_PROVIDER'], LLM_PROVIDER_IDS, 'mock'),
       reasonModel: env['LLM_REASON_MODEL'] ?? 'mock-model-1',
       timeoutMs: asInt(env['LLM_TIMEOUT_MS'], 20_000),
       temperature: Number(env['LLM_TEMPERATURE'] ?? '0.2'),
       maxOutputTokens: asInt(env['LLM_MAX_OUTPUT_TOKENS'], 1_024),
+      structuredOutput: env['LLM_STRUCTURED_OUTPUT'] !== 'off',
     },
     ingest: {
       maxBodyBytes: asInt(env['INGEST_MAX_BODY_BYTES'], 1_000_000),

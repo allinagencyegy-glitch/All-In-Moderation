@@ -31,8 +31,11 @@ env:
   # and health; Phase 02B took it to 452 with the Meta payload corpus, the receive-only adversarial
   # suite, the no-outbound architecture gate and the Postgres transport suite; Phase 02B.1 adds the
   # deployment-bootstrap suite, which proves the role model on a second, entirely fresh cluster.
+  # Phase 02C takes it to 600 with the Arabic normaliser, the provider adapter, the client pack,
+  # suggested delivery, the human review workflow, the no-invented-knowledge suite, the end-to-end
+  # acceptance on the published pack, the LLM egress gate and the Postgres review-queue suite.
   # Adding suites means raising this deliberately; it can never shrink by accident.
-  MIN_TESTS: '473'
+  MIN_TESTS: '600'
 
 jobs:
   verify:
@@ -171,6 +174,7 @@ jobs:
             'postgres runtime shell'
             'postgres application lifecycle'
             'postgres meta transport'
+            'postgres review queue'
             'JobQueue contract: postgres'
           )
           #
@@ -189,12 +193,19 @@ jobs:
       - name: Receive-only is structural — no outbound Meta capability exists
         shell: bash
         timeout-minutes: 2
-        # `tests/architecture/no-outbound-meta.test.ts` asserts this inside the suite. It is
-        # repeated here as a standalone step for one reason: this is the single claim Phase 02B
-        # makes to a client whose real Page is attached, and a claim that important should fail
-        # its own named step rather than being one line inside a 452-test log.
+        # `tests/architecture/no-outbound-meta.test.ts` and `llm-egress.test.ts` assert this
+        # inside the suite. It is repeated here as a standalone step for one reason: this is the
+        # single claim the project makes to a client whose real Page is attached, and a claim that
+        # important should fail its own named step rather than being one line inside a long log.
+        #
+        # Phase 02C narrows the rule; it does not relax it. Before 02C the answer to "how many
+        # files may open a socket" was zero. It is now one, named below, and every other clause
+        # here is unchanged — the Meta host ban included, which has no exception anywhere, that
+        # one file least of all.
         run: |
           set -euo pipefail
+
+          egress_allowlist='src/integrations/llm/anthropic-provider.ts'
 
           hosts='graph[.]facebook[.]com|graph[.]instagram[.]com|graph[.]whatsapp[.]com|api[.]whatsapp[.]com'
           found="$(grep -rInE "$hosts" src/ || true)"
@@ -209,13 +220,38 @@ jobs:
           # and that prose necessarily names `fetch` — so comment lines are filtered out, exactly
           # as the architecture test strips comments before scanning.
           clients='[^A-Za-z_]fetch[[:space:]]*[(]|from .undici.|from .axios.|https?[.]request[[:space:]]*[(]'
-          hits="$(grep -rInE "$clients" src/ | grep -vE ':[0-9]+:[[:space:]]*([*]|//|/[*])' || true)"
+          hits="$(grep -rInE "$clients" src/                     | grep -vE ':[0-9]+:[[:space:]]*([*]|//|/[*])'                     | grep -vF "$egress_allowlist:" || true)"
           if [ -n "$hits" ]; then
             echo "$hits"
-            echo "::error::an outbound HTTP client appears in src/"
+            echo "::error::an outbound HTTP client appears in src/ outside the LLM allowlist"
             exit 1
           fi
-          echo 'no outbound HTTP capability in src/'
+
+          # The allowlist is not decorative, and it is not a licence either. The one exempt file
+          # must actually contain the call — otherwise every assertion above passes vacuously —
+          # and it must name exactly one host.
+          if ! grep -qE '[^A-Za-z_]fetch[[:space:]]*[(]' "$egress_allowlist"; then
+            echo "::error::$egress_allowlist is allowlisted but makes no call; remove the exemption"
+            exit 1
+          fi
+          # Word-bounded on both sides, or `parsed.content` reads as the domain `parsed.co`.
+          domains="$(grep -oE '[a-z0-9-]+([.][a-z0-9-]+)*[.](com|net|org|io|dev|ai|co)'                        "$egress_allowlist" | sort -u)"
+          if [ "$domains" != 'api.anthropic.com' ]; then
+            echo "$domains"
+            echo "::error::the egress adapter must name exactly one host, api.anthropic.com"
+            exit 1
+          fi
+
+          # And no module that makes a decision may import it. The capability belongs to the
+          # composition root; `moderation/` receives an `LlmProvider` through its ports and cannot
+          # tell — or reach — which one it got.
+          sealed="$(grep -rIln 'anthropic-provider' src/moderation src/knowledge src/policy src/core src/operations src/platform || true)"
+          if [ -n "$sealed" ]; then
+            echo "$sealed"
+            echo "::error::a decision-making module can reach the provider adapter"
+            exit 1
+          fi
+          echo "no outbound HTTP capability in src/ beyond $egress_allowlist -> api.anthropic.com"
 
       - name: Shadow acceptance — the full inbound chain, and every outcome simulated
         shell: bash

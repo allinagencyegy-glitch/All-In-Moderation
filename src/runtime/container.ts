@@ -16,6 +16,7 @@ import type {
   MessageRepository,
   ModeratorRunRepository,
   OutboundActionRepository,
+  OutboundActionReviewRepository,
   RawInboundEventRepository,
   SecretResolver,
 } from '../moderation/ports.ts';
@@ -39,6 +40,7 @@ import { createKnowledgeGate } from '../knowledge/application/knowledge-gate.ts'
 import type { LlmProvider, ModelResolver } from '../platform/llm/provider.ts';
 import { createStaticModelResolver } from '../platform/llm/provider.ts';
 import { createMockLlmProvider } from '../integrations/llm/mock-provider.ts';
+import { createAnthropicProvider } from '../integrations/llm/anthropic-provider.ts';
 import { metaSignatureVerifier } from '../integrations/meta/signature.ts';
 import { metaEnvelopeParser } from '../integrations/meta/webhook-parser.ts';
 import type { MockLlmProvider } from '../integrations/llm/mock-provider.ts';
@@ -57,6 +59,7 @@ import { createNormalizeEventService } from '../moderation/application/normalize
 import { createRunModeratorService } from '../moderation/application/run-moderator.ts';
 import { createEscalationService } from '../moderation/application/escalate.ts';
 import { createTakeoverService } from '../moderation/application/takeover.ts';
+import { createReviewService } from '../moderation/application/review.ts';
 import { createMemoryDatabase } from '../adapters/memory/database.ts';
 import type { MemoryDatabase } from '../adapters/memory/database.ts';
 import { createMemoryJobQueue } from '../adapters/memory/job-queue.ts';
@@ -75,6 +78,7 @@ import {
   createMemoryMessageRepository,
   createMemoryModeratorRunRepository,
   createMemoryOutboundActionRepository,
+  createMemoryOutboundActionReviewRepository,
   createMemoryOutboxRelayStore,
   createMemoryRawInboundEventRepository,
   createMemorySecretResolver,
@@ -109,6 +113,7 @@ export interface Persistence {
   readonly messages: MessageRepository;
   readonly runs: ModeratorRunRepository;
   readonly outboundActions: OutboundActionRepository;
+  readonly outboundReviews: OutboundActionReviewRepository;
   readonly handoffs: HandoffRepository;
   readonly knowledge: KnowledgeRepository;
   readonly packs: AccountPackRepository;
@@ -137,6 +142,11 @@ export interface CoreContainer {
   readonly moderator: ReturnType<typeof createRunModeratorService>;
   readonly takeover: ReturnType<typeof createTakeoverService>;
   readonly escalation: ReturnType<typeof createEscalationService>;
+  /**
+   * Human review of suggested replies (ADR-011). Note what it is not wired to: there is no
+   * dispatcher for it to hand an approval to, and adding one would be a separate, named act.
+   */
+  readonly review: ReturnType<typeof createReviewService>;
   readonly queue: JobQueue;
   readonly deadLetters: DeadLetterStore;
   readonly outbox: EventOutbox;
@@ -147,6 +157,7 @@ export interface CoreContainer {
   readonly messages: MessageRepository;
   readonly runs: ModeratorRunRepository;
   readonly outboundActions: OutboundActionRepository;
+  readonly outboundReviews: OutboundActionReviewRepository;
   readonly handoffs: HandoffRepository;
   readonly knowledgeGaps: KnowledgeGapRepository;
   readonly connections: ChannelConnectionRepository;
@@ -183,6 +194,13 @@ export interface ContainerOptions {
   readonly ids?: IdFactory;
   readonly logger?: Logger;
   readonly provider?: LlmProvider | MockLlmProvider;
+  /**
+   * The model API key, resolved at the boot edge and handed in here.
+   *
+   * Required when `LLM_PROVIDER=anthropic`, absent otherwise. It is deliberately not on
+   * `RuntimeConfig`: that object is dumped in diagnostics, and a credential must not be in it.
+   */
+  readonly llmApiKey?: string;
   readonly secrets?: ReadonlyMap<string, string | ChannelSecrets>;
   readonly random?: () => number;
   /**
@@ -213,6 +231,7 @@ export function createMemoryPersistence(
     messages: createMemoryMessageRepository(db),
     runs: createMemoryModeratorRunRepository(db),
     outboundActions: createMemoryOutboundActionRepository(db),
+    outboundReviews: createMemoryOutboundActionReviewRepository(db),
     handoffs: createMemoryHandoffRepository(db),
     knowledge: createMemoryKnowledgeRepository(db),
     packs: createMemoryAccountPackRepository(db),
@@ -260,6 +279,7 @@ export function createContainerWith(
     messages,
     runs,
     outboundActions,
+    outboundReviews,
     handoffs,
     knowledge,
     packs,
@@ -272,7 +292,7 @@ export function createContainerWith(
   } = persistence;
   const transactions = persistence.transactions;
 
-  const provider = options.provider ?? createMockLlmProvider({ clock });
+  const provider = options.provider ?? createDefaultProvider(config, clock, options.llmApiKey);
   const models = createStaticModelResolver({
     REASON: {
       providerId: provider.id,
@@ -377,6 +397,22 @@ export function createContainerWith(
     handoffs,
     packs,
     outbox,
+    audit,
+    transactions,
+    clock,
+    ids,
+    logger,
+  });
+
+  const review = createReviewService({
+    conversations,
+    messages,
+    runs,
+    outbound: outboundActions,
+    reviews: outboundReviews,
+    handoffs,
+    knowledge,
+    packs,
     audit,
     transactions,
     clock,
@@ -510,6 +546,7 @@ export function createContainerWith(
     moderator,
     takeover,
     escalation,
+    review,
     queue,
     deadLetters,
     outbox,
@@ -520,6 +557,7 @@ export function createContainerWith(
     messages,
     runs,
     outboundActions,
+    outboundReviews,
     handoffs,
     knowledgeGaps,
     connections,
@@ -546,6 +584,46 @@ export function createContainerWith(
       });
     },
   };
+}
+
+/**
+ * Selects the provider named by configuration.
+ *
+ * `mock` is the default and stays the default forever: the entire test suite and every CI step
+ * run against it, so a suite that silently reached a paid API would be both a cost and a leak.
+ * Reaching a real model is an explicit, named act — `LLM_PROVIDER=anthropic` plus a credential —
+ * and the absence of the credential fails the process at boot rather than on a customer's message.
+ *
+ * This function is the *only* place in `src/` that constructs the network-capable adapter, which
+ * `tests/architecture/llm-egress.test.ts` asserts.
+ */
+function createDefaultProvider(
+  config: RuntimeConfig,
+  clock: Clock,
+  apiKey: string | undefined,
+): LlmProvider {
+  if (config.llm.providerId === 'mock') return createMockLlmProvider({ clock });
+
+  if (!apiKey) {
+    throw new TerminalError(
+      'LLM_API_KEY_MISSING',
+      'LLM_PROVIDER=anthropic requires a model API key, supplied at the boot edge (ANTHROPIC_API_KEY)',
+    );
+  }
+  return createAnthropicProvider({
+    apiKey,
+    clock,
+    // Every role binds to the one configured model. This is not a router: a "cheap model first,
+    // escalate if unsure" strategy doubles the evaluation surface for a saving we cannot yet
+    // measure (ADR-007).
+    models: {
+      REASON: config.llm.reasonModel,
+      CLASSIFY: config.llm.reasonModel,
+      VISION: config.llm.reasonModel,
+      TRANSCRIBE: config.llm.reasonModel,
+    },
+    structuredOutput: config.llm.structuredOutput,
+  });
 }
 
 /**

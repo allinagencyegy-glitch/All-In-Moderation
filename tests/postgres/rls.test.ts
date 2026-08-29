@@ -113,6 +113,7 @@ describe('postgres row-level security', { skip: available ? false : 'no PostgreS
       'raw_inbound_events',
       'moderator_runs',
       'outbound_actions',
+      'outbound_action_reviews',
       'handoffs',
       'channel_connections',
       'channel_identities',

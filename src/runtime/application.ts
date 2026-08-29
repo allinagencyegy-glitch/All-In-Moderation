@@ -53,6 +53,11 @@ export interface ApplicationOptions {
   readonly ids?: IdFactory;
   readonly logger?: Logger;
   readonly provider?: LlmProvider;
+  /**
+   * The model API key. Read from the environment at the boot edge and passed through, so it never
+   * lands on `RuntimeConfig` — see the note at the end of that interface.
+   */
+  readonly llmApiKey?: string;
   readonly relayTarget?: RelayTarget;
   /** Closes the persistence bundle. Runs last, once nothing else can be using it. */
   readonly closePersistence?: () => Promise<void>;
@@ -94,6 +99,7 @@ export function createApplication(options: ApplicationOptions): Application {
     isShuttingDown: () => shuttingDown,
     ...(options.ids ? { ids: options.ids } : {}),
     ...(options.provider ? { provider: options.provider } : {}),
+    ...(options.llmApiKey ? { llmApiKey: options.llmApiKey } : {}),
     ...(options.relayTarget ? { relayTarget: options.relayTarget } : {}),
   });
 

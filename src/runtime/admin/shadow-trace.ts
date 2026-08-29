@@ -2,6 +2,7 @@ import type { AccountScope } from '../../core/account/index.ts';
 import type { ConversationId, MessageId, RawInboundEventId } from '../../platform/ids.ts';
 import { isReceiveOnly } from '../../moderation/domain/channel.ts';
 import type { NormalizationSummary, RawEventState } from '../../moderation/domain/raw-event.ts';
+import { LIVE_OUTBOUND_STATES } from '../../moderation/domain/outbound-action.ts';
 import type {
   ChannelConnectionRepository,
   ConversationRepository,
@@ -20,8 +21,10 @@ import type {
  *   conversation and message state -> **simulated** moderator outcome only.
  *
  * Every link is asserted from persisted state rather than from logs, and the last link is asserted
- * negatively: an outbound action whose `deliveryMode` is anything but SIMULATED, or whose state is
- * anything but SIMULATED/PENDING_DISPATCH, is a failure of the whole trace — not a warning.
+ * negatively: an AUTONOMOUS outbound action, or one that reached a live dispatch state, is a
+ * failure of the whole trace — not a warning. Phase 02C adds SUGGESTED to the accepted set, which
+ * is not a relaxation: a suggestion is a draft that was deliberately never queued and that waits
+ * for a named person to send it by hand (ADR-011).
  *
  * Nothing here contacts a provider. The trace is a set of reads.
  */
@@ -46,6 +49,8 @@ export interface TracedOutboundAction {
   readonly deliveryMode: string;
   readonly state: string;
   readonly simulated: boolean;
+  /** Awaiting a person, or accepted by one and waiting to be sent by hand (ADR-011). */
+  readonly awaitingHuman: boolean;
 }
 
 export interface TracedConversation {
@@ -145,21 +150,34 @@ export async function traceRawEvent(
     const runs = await deps.runs.listByConversation(scope, conversationId);
     const actions = await deps.outboundActions.listByConversation(scope, conversationId);
 
-    const tracedActions = actions.map((action) => ({
+    const tracedActions: TracedOutboundAction[] = actions.map((action) => ({
       actionType: action.actionType,
       deliveryMode: action.deliveryMode,
       state: action.state,
       simulated: action.deliveryMode === 'SIMULATED',
+      awaitingHuman: action.deliveryMode === 'SUGGESTED',
     }));
-    for (const action of tracedActions) {
-      // The load-bearing assertion of the whole phase.
-      if (!action.simulated) {
+    for (const action of actions) {
+      // The load-bearing assertion of the whole phase, and now asserted on the state machine
+      // rather than only on the delivery mode — which is the stronger of the two statements.
+      //
+      // `AUTONOMOUS` is the only mode that means "send it", so it is the only one that fails
+      // here. `SUGGESTED` was added in Phase 02C and means the opposite: a draft that was
+      // deliberately never queued, sitting in SUPPRESSED until a named person accepts it and
+      // sends it themselves. Neither it nor `SIMULATED` can reach a customer through this
+      // system, because this system has no transport at all.
+      if (action.deliveryMode === 'AUTONOMOUS') {
         failures.push(
-          `outbound action ${action.actionType} is ${action.deliveryMode}, not SIMULATED`,
+          `outbound action ${action.actionType} is AUTONOMOUS, not SIMULATED or SUGGESTED`,
         );
       }
-      if (action.state !== 'SIMULATED' && action.state !== 'PENDING_DISPATCH') {
-        failures.push(`outbound action ${action.actionType} reached state ${action.state}`);
+      if (LIVE_OUTBOUND_STATES.has(action.state) && action.state !== 'PENDING_DISPATCH') {
+        failures.push(`outbound action ${action.actionType} reached live state ${action.state}`);
+      }
+      if (action.deliveryMode === 'SUGGESTED' && action.state === 'PENDING_DISPATCH') {
+        // Belt and braces on the one edge that would silently undo human review: a suggestion
+        // must never be queued for dispatch.
+        failures.push(`suggested action ${action.actionType} was queued for dispatch`);
       }
     }
 
