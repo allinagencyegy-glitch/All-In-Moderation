@@ -1,4 +1,4 @@
-import type { Account } from '../../core/account/index.ts';
+import type { Account, AccountMembership, User } from '../../core/account/index.ts';
 import type { AccountPackVersion } from '../../knowledge/domain/account-pack.ts';
 import type { KnowledgeEntry } from '../../knowledge/domain/knowledge-entry.ts';
 import type { KnowledgeGapRecord } from '../../knowledge/ports.ts';
@@ -35,6 +35,8 @@ import type { RawInboundEvent } from '../../moderation/domain/raw-event.ts';
 
 export interface MemoryTables {
   accounts: Map<string, Account>;
+  users: Map<string, User>;
+  memberships: Map<string, AccountMembership>;
   connections: Map<string, ChannelConnection>;
   rawEvents: Map<string, RawInboundEvent>;
   identities: Map<string, ChannelIdentity>;
@@ -66,6 +68,8 @@ export interface MemoryDatabase {
 function emptyTables(): MemoryTables {
   return {
     accounts: new Map(),
+    users: new Map(),
+    memberships: new Map(),
     connections: new Map(),
     rawEvents: new Map(),
     identities: new Map(),
@@ -94,6 +98,8 @@ export function createMemoryDatabase(): MemoryDatabase {
 
   const snapshot = (): MemoryTables => ({
     accounts: new Map(tables.accounts),
+    users: new Map(tables.users),
+    memberships: new Map(tables.memberships),
     connections: new Map(tables.connections),
     rawEvents: new Map(tables.rawEvents),
     identities: new Map(tables.identities),

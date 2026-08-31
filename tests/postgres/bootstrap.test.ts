@@ -446,7 +446,7 @@ describe('postgres deployment bootstrap', { skip: available ? false : 'no Postgr
         'rotated without a hand-written ALTER for every object',
     );
 
-    // Both SECURITY DEFINER resolvers execute as their owner, against FORCE'd RLS. If the owner
+    // Every SECURITY DEFINER resolver executes as its owner, against FORCE'd RLS. If the owner
     // were not BYPASSRLS they would return nothing and webhook ingest would fail for every
     // delivery — silently, because "no such connection" is a legitimate answer.
     const definers = await asSuperuser(async (client) => {
@@ -459,6 +459,7 @@ describe('postgres deployment bootstrap', { skip: available ? false : 'no Postgr
     });
     assert.deepEqual(definers, [
       { proname: 'app_inbound_backlog', owner: MIGRATION_ROLE },
+      { proname: 'app_resolve_account_id_by_slug', owner: MIGRATION_ROLE },
       { proname: 'app_resolve_webhook_connection', owner: MIGRATION_ROLE },
     ]);
   });

@@ -1,4 +1,10 @@
-import type { Account, AccountRepository, AccountScope } from '../../core/account/index.ts';
+import type {
+  Account,
+  AccountMembershipRepository,
+  AccountRepository,
+  AccountScope,
+  UserRepository,
+} from '../../core/account/index.ts';
 import { readInScope, scopeViolation, writeInScope } from '../../core/account/index.ts';
 import type { AuditEvent, AuditLog } from '../../operations/audit.ts';
 import type { DeadLetter, DeadLetterStore } from '../../operations/dead-letter.ts';
@@ -9,6 +15,7 @@ import type {
   IdFactory,
 } from '../../platform/ids.ts';
 import { ID_PREFIX } from '../../platform/ids.ts';
+import { TerminalError } from '../../platform/errors.ts';
 import type {
   AccountPackRepository,
   KnowledgeGapRepository,
@@ -61,9 +68,67 @@ export function createMemoryAccountRepository(db: MemoryDatabase): AccountReposi
     findBySlug(slug) {
       return Promise.resolve(values(db.tables.accounts).find((a) => a.slug === slug) ?? null);
     },
+    insertIfNew(account) {
+      const existing =
+        db.tables.accounts.get(account.id) ??
+        values(db.tables.accounts).find((other) => other.slug === account.slug);
+      if (existing) return Promise.resolve({ inserted: false, record: existing });
+      db.tables.accounts.set(account.id, account);
+      return Promise.resolve({ inserted: true, record: account });
+    },
     save(account: Account) {
+      const slugOwner = values(db.tables.accounts).find(
+        (other) => other.id !== account.id && other.slug === account.slug,
+      );
+      if (slugOwner) {
+        return Promise.reject(
+          new TerminalError('ACCOUNT_SLUG_CONFLICT', 'Account slug is already in use'),
+        );
+      }
       db.tables.accounts.set(account.id, account);
       return Promise.resolve();
+    },
+  };
+}
+
+export function createMemoryUserRepository(db: MemoryDatabase): UserRepository {
+  const find = (email: string) =>
+    values(db.tables.users).find((user) => user.email.trim().toLowerCase() === email) ?? null;
+
+  return {
+    findByNormalizedEmail(email) {
+      return Promise.resolve(find(email));
+    },
+    insertIfNew(user) {
+      const existing = find(user.email);
+      if (existing) return Promise.resolve({ inserted: false, record: existing });
+      db.tables.users.set(user.id, user);
+      return Promise.resolve({ inserted: true, record: user });
+    },
+  };
+}
+
+export function createMemoryAccountMembershipRepository(
+  db: MemoryDatabase,
+): AccountMembershipRepository {
+  const key = (accountId: string, userId: string): string => `${accountId}:${userId}`;
+
+  return {
+    findByUserId(scope, userId) {
+      return readInScope(
+        scope,
+        db.tables.memberships.get(key(scope.accountId, userId)),
+        'account_membership',
+      );
+    },
+    insertIfNew(scope, membership) {
+      const violation = scopeViolation(scope, membership, 'account_membership');
+      if (violation) return Promise.reject(violation);
+      const membershipKey = key(membership.accountId, membership.userId);
+      const existing = db.tables.memberships.get(membershipKey);
+      if (existing) return Promise.resolve({ inserted: false, record: existing });
+      db.tables.memberships.set(membershipKey, membership);
+      return Promise.resolve({ inserted: true, record: membership });
     },
   };
 }

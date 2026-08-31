@@ -12,13 +12,30 @@ export interface Account {
   readonly createdAt: Date;
 }
 
-export type AccountRole = 'OWNER' | 'ADMIN' | 'OPERATOR' | 'VIEWER';
+export const ACCOUNT_ROLES = ['OWNER', 'ADMIN', 'OPERATOR', 'VIEWER'] as const;
+export type AccountRole = (typeof ACCOUNT_ROLES)[number];
+
+export type UserStatus = 'ACTIVE' | 'DISABLED';
+
+/** Platform identity. Account authority is carried only by a membership, never by this row. */
+export interface User {
+  readonly id: UserId;
+  /** Canonical lower-case, surrounding whitespace removed. */
+  readonly email: string;
+  readonly fullName: string | null;
+  readonly status: UserStatus;
+  readonly createdAt: Date;
+}
 
 export interface AccountMembership {
   readonly accountId: AccountId;
   readonly userId: UserId;
   readonly role: AccountRole;
   readonly status: 'ACTIVE' | 'REVOKED';
+}
+
+export function isAccountRole(value: string): value is AccountRole {
+  return ACCOUNT_ROLES.includes(value as AccountRole);
 }
 
 /**

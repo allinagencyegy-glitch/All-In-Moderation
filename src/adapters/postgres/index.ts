@@ -6,6 +6,7 @@ import { DEFAULT_POSTGRES_CONFIG, createPostgresDatabase } from './client.ts';
 import { createPostgresJobQueue } from './job-queue.ts';
 import {
   createPostgresAccountPackRepository,
+  createPostgresAccountMembershipRepository,
   createPostgresAccountRepository,
   createPostgresAuditLog,
   createPostgresChannelConnectionRepository,
@@ -23,6 +24,7 @@ import {
   createPostgresOutboxRelayStore,
   createPostgresRawInboundEventRepository,
   createPostgresStoreProbe,
+  createPostgresUserRepository,
 } from './repositories.ts';
 
 /**
@@ -84,6 +86,8 @@ export function createPostgresPersistence(options: PostgresPersistenceOptions) {
     relayDb,
     transactions: runtimeDb.transactions,
     accounts: createPostgresAccountRepository(runtimeDb),
+    users: createPostgresUserRepository(runtimeDb),
+    memberships: createPostgresAccountMembershipRepository(runtimeDb),
     connections: createPostgresChannelConnectionRepository(runtimeDb),
     rawEvents: createPostgresRawInboundEventRepository(runtimeDb),
     identities: createPostgresChannelIdentityRepository(runtimeDb, options.ids),

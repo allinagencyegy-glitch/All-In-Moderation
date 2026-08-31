@@ -36,6 +36,38 @@ function run(name: string, args: readonly string[], env: Record<string, string> 
 }
 
 describe('admin CLIs', () => {
+  it('account prints the complete provisioning usage without opening a database', () => {
+    const result = run('account', []);
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /account\.ts provision/);
+    assert.match(result.stdout, /OWNER\|ADMIN\|OPERATOR\|VIEWER/);
+  });
+
+  it('account refuses an invalid role before opening a database', () => {
+    const result = run('account', [
+      'provision',
+      '--slug',
+      'dental-hub',
+      '--name',
+      'Dental Hub',
+      '--locale',
+      'ar',
+      '--timezone',
+      'Africa/Cairo',
+      '--user-email',
+      'owner@example.com',
+      '--user-name',
+      'Owner',
+      '--role',
+      'SUPERADMIN',
+    ]);
+    assert.equal(result.status, 1);
+    const error = JSON.parse(result.stderr) as { code: string; message: string };
+    assert.equal(error.code, 'ARGS_INVALID');
+    assert.match(error.message, /OWNER, ADMIN, OPERATOR, VIEWER/);
+    assert.ok(!error.message.includes('PG_RUNTIME_URL'));
+  });
+
   it('meta-connection prints usage and succeeds with no arguments', () => {
     const result = run('meta-connection', []);
     assert.equal(result.status, 0);
