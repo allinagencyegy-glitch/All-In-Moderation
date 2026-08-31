@@ -5,7 +5,11 @@ import type { IdFactory } from '../platform/ids.ts';
 import { createUlidIdFactory } from '../platform/ids.ts';
 import type { Logger } from '../platform/logger.ts';
 import { createLogger } from '../platform/logger.ts';
-import type { AccountRepository } from '../core/account/index.ts';
+import type {
+  AccountMembershipRepository,
+  AccountRepository,
+  UserRepository,
+} from '../core/account/index.ts';
 import { scopeForAccount } from '../core/account/index.ts';
 import type {
   ChannelConnectionRepository,
@@ -65,6 +69,7 @@ import type { MemoryDatabase } from '../adapters/memory/database.ts';
 import { createMemoryJobQueue } from '../adapters/memory/job-queue.ts';
 import {
   createMemoryAccountPackRepository,
+  createMemoryAccountMembershipRepository,
   createMemoryAccountRepository,
   createMemoryAuditLog,
   createMemoryChannelConnectionRepository,
@@ -83,6 +88,7 @@ import {
   createMemoryRawInboundEventRepository,
   createMemorySecretResolver,
   createMemoryStoreProbe,
+  createMemoryUserRepository,
 } from '../adapters/memory/repositories.ts';
 import type { RuntimeConfig } from './config.ts';
 import { loadConfig } from './config.ts';
@@ -106,6 +112,8 @@ import { loadConfig } from './config.ts';
 export interface Persistence {
   readonly transactions: TransactionRunner;
   readonly accounts: AccountRepository;
+  readonly users: UserRepository;
+  readonly memberships: AccountMembershipRepository;
   readonly connections: ChannelConnectionRepository;
   readonly rawEvents: RawInboundEventRepository;
   readonly identities: ChannelIdentityRepository;
@@ -224,6 +232,8 @@ export function createMemoryPersistence(
   return {
     transactions: db.transactions,
     accounts: createMemoryAccountRepository(db),
+    users: createMemoryUserRepository(db),
+    memberships: createMemoryAccountMembershipRepository(db),
     connections: createMemoryChannelConnectionRepository(db),
     rawEvents: createMemoryRawInboundEventRepository(db),
     identities: createMemoryChannelIdentityRepository(db, ids),

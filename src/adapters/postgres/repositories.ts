@@ -1,5 +1,13 @@
-import type { Account, AccountRepository, AccountScope } from '../../core/account/index.ts';
-import { readInScope } from '../../core/account/index.ts';
+import type {
+  Account,
+  AccountMembership,
+  AccountMembershipRepository,
+  AccountRepository,
+  AccountScope,
+  User,
+  UserRepository,
+} from '../../core/account/index.ts';
+import { assertInScope, readInScope } from '../../core/account/index.ts';
 import type { Channel, Surface } from '../../core/channel.ts';
 import type { AuditEvent, AuditLog } from '../../operations/audit.ts';
 import type { DeadLetter, DeadLetterStore } from '../../operations/dead-letter.ts';
@@ -26,7 +34,7 @@ import type {
   UserId,
 } from '../../platform/ids.ts';
 import { ID_PREFIX, asId } from '../../platform/ids.ts';
-import { ConcurrencyConflictError, NotImplementedError } from '../../platform/errors.ts';
+import { ConcurrencyConflictError, TerminalError } from '../../platform/errors.ts';
 import type {
   AccountPackRepository,
   KnowledgeGapRecord,
@@ -148,22 +156,81 @@ export function createPostgresAccountRepository(db: PostgresDatabase): AccountRe
       );
     },
 
-    findBySlug() {
+    async findBySlug(slug) {
       /*
-       * Not implementable under the tenancy model as it stands, and failing loudly is the only
-       * honest option.
+       * A slug is the operator's tenant selector, so it has to establish the account context
+       * before the full row can be read. Migration 0010 exposes exactly one identifier through a
+       * pinned SECURITY DEFINER resolver; the account row is then read normally under FORCE RLS.
        *
-       * RLS on `accounts` is keyed on the account id. Resolving a *slug* means asking "which
-       * tenant is this?" before a tenant context exists — the same question the webhook path asks,
-       * which 0005 answers with one narrow SECURITY DEFINER function over an unguessable id. A
-       * slug is guessable and this lookup is a control-plane operation (an operator choosing an
-       * account), so it wants a control-plane role rather than a hole in the runtime's policy.
-       *
-       * There is no caller in `src/`. Returning `null` would be worse than throwing: a login
-       * screen that silently cannot find any account looks like bad credentials.
+       * The transaction-scoped advisory lock serialises two operator provisions of the same slug.
+       * `provisionOperatorAccount` wraps lookup and creation in one transaction, so the lock stays
+       * held through the INSERT and prevents a read-then-write race without widening visibility.
        */
-      return Promise.reject(
-        new NotImplementedError('AccountRepository.findBySlug on PostgreSQL', 'Phase 2'),
+      const resolved = await db.unscoped(async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `operator-account:${slug}`,
+        ]);
+        const result = await client.query<{ account_id: string }>(
+          'SELECT account_id FROM app_resolve_account_id_by_slug($1)',
+          [slug],
+        );
+        return result.rows[0]?.account_id ?? null;
+      }, 'accounts:resolveSlug');
+      if (!resolved) return null;
+
+      return await db.scoped(
+        asId<AccountId>(resolved),
+        async (client) => {
+          const result = await client.query<AccountRow>(
+            'SELECT id, slug, name, status, default_locale, timezone, created_at FROM accounts WHERE id = $1',
+            [resolved],
+          );
+          const row = result.rows[0];
+          return row ? toAccount(row) : null;
+        },
+        'accounts:findBySlug',
+      );
+    },
+
+    async insertIfNew(account) {
+      return await db.scoped(
+        account.id,
+        async (client) => {
+          const inserted = await client.query<AccountRow>(
+            `INSERT INTO accounts (id, slug, name, status, default_locale, timezone, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)
+             ON CONFLICT DO NOTHING
+             RETURNING id, slug, name, status, default_locale, timezone, created_at`,
+            [
+              account.id,
+              account.slug,
+              account.name,
+              account.status,
+              account.defaultLocale,
+              account.timezone,
+              account.createdAt,
+            ],
+          );
+          const insertedRow = inserted.rows[0];
+          if (insertedRow) return { inserted: true, record: toAccount(insertedRow) };
+
+          // An id collision is visible in this candidate scope. A slug collision on another id is
+          // hidden by RLS and therefore becomes an explicit refusal rather than a remapping.
+          const existing = await client.query<AccountRow>(
+            `SELECT id, slug, name, status, default_locale, timezone, created_at
+               FROM accounts WHERE id = $1`,
+            [account.id],
+          );
+          const existingRow = existing.rows[0];
+          if (!existingRow) {
+            throw new TerminalError(
+              'ACCOUNT_SLUG_CONFLICT',
+              'Account slug was claimed concurrently; rerun provisioning to resolve it safely',
+            );
+          }
+          return { inserted: false, record: toAccount(existingRow) };
+        },
+        'accounts:insertIfNew',
       );
     },
 
@@ -190,6 +257,142 @@ export function createPostgresAccountRepository(db: PostgresDatabase): AccountRe
           );
         },
         'accounts:save',
+      );
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// users and account_memberships
+// ---------------------------------------------------------------------------------------------
+
+interface UserRow {
+  id: string;
+  email: string;
+  full_name: string | null;
+  status: string;
+  created_at: Date;
+}
+
+const USER_COLUMNS = 'id, email, full_name, status, created_at';
+
+const toUser = (row: UserRow): User => ({
+  id: asId<UserId>(row.id),
+  email: row.email,
+  fullName: row.full_name,
+  status: row.status as User['status'],
+  createdAt: row.created_at,
+});
+
+export function createPostgresUserRepository(db: PostgresDatabase): UserRepository {
+  return {
+    async findByNormalizedEmail(email) {
+      return await db.unscoped(async (client) => {
+        const result = await client.query<UserRow>(
+          `SELECT ${USER_COLUMNS} FROM users WHERE lower(btrim(email)) = $1`,
+          [email],
+        );
+        const row = result.rows[0];
+        return row ? toUser(row) : null;
+      }, 'users:findByNormalizedEmail');
+    },
+
+    async insertIfNew(user) {
+      return await db.unscoped(async (client) => {
+        const inserted = await client.query<UserRow>(
+          `INSERT INTO users (id, email, full_name, status, created_at)
+           VALUES ($1,$2,$3,$4,$5)
+           ON CONFLICT DO NOTHING
+           RETURNING ${USER_COLUMNS}`,
+          [user.id, user.email, user.fullName, user.status, user.createdAt],
+        );
+        const insertedRow = inserted.rows[0];
+        if (insertedRow) return { inserted: true, record: toUser(insertedRow) };
+
+        const existing = await client.query<UserRow>(
+          `SELECT ${USER_COLUMNS} FROM users WHERE lower(btrim(email)) = $1`,
+          [user.email],
+        );
+        const existingRow = existing.rows[0];
+        if (!existingRow) {
+          throw new TerminalError(
+            'USER_ID_CONFLICT',
+            'Generated user identifier is already mapped to another user',
+          );
+        }
+        return { inserted: false, record: toUser(existingRow) };
+      }, 'users:insertIfNew');
+    },
+  };
+}
+
+interface MembershipRow {
+  account_id: string;
+  user_id: string;
+  role: string;
+  status: string;
+}
+
+const MEMBERSHIP_COLUMNS = 'account_id, user_id, role, status';
+
+const toMembership = (row: MembershipRow): AccountMembership => ({
+  accountId: asId<AccountId>(row.account_id),
+  userId: asId<UserId>(row.user_id),
+  role: row.role as AccountMembership['role'],
+  status: row.status as AccountMembership['status'],
+});
+
+export function createPostgresAccountMembershipRepository(
+  db: PostgresDatabase,
+): AccountMembershipRepository {
+  return {
+    async findByUserId(scope, userId) {
+      const membership = await db.scoped(
+        scope.accountId,
+        async (client) => {
+          const result = await client.query<MembershipRow>(
+            `SELECT ${MEMBERSHIP_COLUMNS} FROM account_memberships
+              WHERE account_id = $1 AND user_id = $2`,
+            [scope.accountId, userId],
+          );
+          const row = result.rows[0];
+          return row ? toMembership(row) : null;
+        },
+        'memberships:findByUserId',
+      );
+      return await readInScope(scope, membership, 'account_membership');
+    },
+
+    async insertIfNew(scope, membership) {
+      assertInScope(scope, membership, 'account_membership');
+      return await db.scoped(
+        scope.accountId,
+        async (client) => {
+          const inserted = await client.query<MembershipRow>(
+            `INSERT INTO account_memberships (account_id, user_id, role, status)
+             VALUES ($1,$2,$3,$4)
+             ON CONFLICT (account_id, user_id) DO NOTHING
+             RETURNING ${MEMBERSHIP_COLUMNS}`,
+            [membership.accountId, membership.userId, membership.role, membership.status],
+          );
+          const insertedRow = inserted.rows[0];
+          if (insertedRow) return { inserted: true, record: toMembership(insertedRow) };
+
+          const existing = await client.query<MembershipRow>(
+            `SELECT ${MEMBERSHIP_COLUMNS} FROM account_memberships
+              WHERE account_id = $1 AND user_id = $2`,
+            [membership.accountId, membership.userId],
+          );
+          const existingRow = existing.rows[0];
+          if (!existingRow) {
+            throw new TerminalError(
+              'MEMBERSHIP_INSERT_CONFLICT',
+              'Membership could not be created or read back in the tenant scope',
+            );
+          }
+          return { inserted: false, record: toMembership(existingRow) };
+        },
+        'memberships:insertIfNew',
       );
     },
   };

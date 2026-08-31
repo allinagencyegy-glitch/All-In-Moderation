@@ -1,5 +1,18 @@
-export type { Account, AccountMembership, AccountRole, AccountStatus } from './account.ts';
-export { canActAutonomously, canIngest, canOperateConversations } from './account.ts';
+export type {
+  Account,
+  AccountMembership,
+  AccountRole,
+  AccountStatus,
+  User,
+  UserStatus,
+} from './account.ts';
+export {
+  ACCOUNT_ROLES,
+  canActAutonomously,
+  canIngest,
+  canOperateConversations,
+  isAccountRole,
+} from './account.ts';
 export type { AccountScope } from './scope.ts';
 export {
   assertInScope,
@@ -11,4 +24,4 @@ export {
   scopedCacheKey,
   scopedPartitionKey,
 } from './scope.ts';
-export type { AccountRepository } from './ports.ts';
+export type { AccountMembershipRepository, AccountRepository, UserRepository } from './ports.ts';

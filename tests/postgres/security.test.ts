@@ -289,8 +289,23 @@ describe('postgres security posture', { skip: available ? false : 'no PostgreSQL
     assert.deepEqual(returned, ['connection_id', 'account_id']);
   });
 
+  it('the operator slug resolver exposes one identifier and no account data', async () => {
+    const seeded = await h.seedAccount({ slug: 'operator-scope-proof' });
+    const returned = await asRuntime(null, async (client) => {
+      const result = await client.query('SELECT * FROM app_resolve_account_id_by_slug($1)', [
+        seeded.account.slug,
+      ]);
+      return {
+        fields: result.fields.map((field) => field.name),
+        rows: result.rows as { account_id: string }[],
+      };
+    });
+    assert.deepEqual(returned.fields, ['account_id']);
+    assert.deepEqual(returned.rows, [{ account_id: seeded.account.id }]);
+  });
+
   it('the inbound-backlog function returns an aggregate and cannot return a row', async () => {
-    // The second, and last, hole in RLS. "Oldest unprocessed inbound event" is a cross-tenant
+    // "Oldest unprocessed inbound event" is a cross-tenant
     // question asked by the least-authenticated surface in the system, so the alternative — a
     // cross-tenant grant on `raw_inbound_events` — would be far worse. There is no row to leak
     // because the function never selects one, and a later edit that tried to return one would
@@ -326,10 +341,12 @@ describe('postgres security posture', { skip: available ? false : 'no PostgreSQL
     //
     //   app_resolve_webhook_connection  ingest must resolve tenancy *before* it has tenancy
     //                                   (ADR-006). Opaque id in, two ids out.
+    //   app_resolve_account_id_by_slug  operator provisioning resolves one account id, then
+    //                                   performs every row read and write under that RLS scope.
     //   app_inbound_backlog             a count and a timestamp, for the health endpoint.
     assert.deepEqual(
       definers.map((d) => d.proname),
-      ['app_inbound_backlog', 'app_resolve_webhook_connection'],
+      ['app_inbound_backlog', 'app_resolve_account_id_by_slug', 'app_resolve_webhook_connection'],
       'every SECURITY DEFINER function is a hole in RLS and must be justified one at a time',
     );
     for (const definer of definers) {
